@@ -13,6 +13,8 @@ public class ReviewFileRequest {
     private String simulatedFileName;
     private String diffContent;
     private String format; // "json", "sarif", "github"
+    private String baselinePath;
+    private com.sentinelpr.core.governance.policy.SentinelPolicy policy;
 
     public ReviewFileRequest() {
     }
@@ -67,5 +69,21 @@ public class ReviewFileRequest {
 
     public void setFormat(String format) {
         this.format = format;
+    }
+
+    public String getBaselinePath() {
+        return baselinePath;
+    }
+
+    public void setBaselinePath(String baselinePath) {
+        this.baselinePath = baselinePath;
+    }
+
+    public com.sentinelpr.core.governance.policy.SentinelPolicy getPolicy() {
+        return policy;
+    }
+
+    public void setPolicy(com.sentinelpr.core.governance.policy.SentinelPolicy policy) {
+        this.policy = policy;
     }
 }

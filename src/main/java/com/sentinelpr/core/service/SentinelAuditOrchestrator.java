@@ -10,6 +10,9 @@ import com.sentinelpr.core.model.SuppressedFinding;
 import com.sentinelpr.core.model.UnifiedDiffPatch;
 import com.sentinelpr.core.analysis.diff.IncrementalDiffScanner;
 import com.sentinelpr.core.analysis.diff.IncrementalDiffScanner.FileDiff;
+import com.sentinelpr.core.governance.baseline.BaselineEntry;
+import com.sentinelpr.core.governance.baseline.BaselineManager;
+import com.sentinelpr.core.governance.baseline.BaselineSnapshot;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -20,6 +23,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -31,7 +35,8 @@ import java.util.UUID;
  *   <li>Session memory deduplication check</li>
  *   <li>Rule reasoning and vulnerability evaluation</li>
  *   <li>False positive suppression engine (annotations, inline comments, .sentinelignore)</li>
- *   <li>Incremental PR diff filtering (baseline separation)</li>
+ *   <li>Incremental PR diff filtering (diff baseline separation)</li>
+ *   <li>Enterprise technical debt baseline evaluation (BASELINE_ACCEPTED)</li>
  *   <li>Atomic patch composition and regression verification</li>
  *   <li>Session memory persistence</li>
  * </ol>
@@ -46,6 +51,7 @@ public class SentinelAuditOrchestrator {
     private final SuppressionManager suppressionManager;
     private final DataflowTracker dataflowTracker;
     private final IncrementalDiffScanner diffScanner;
+    private final BaselineManager baselineManager;
 
     public SentinelAuditOrchestrator(
             CodeInspectionService inspectionService,
@@ -53,7 +59,7 @@ public class SentinelAuditOrchestrator {
             AutomatedPatchService patchService,
             ReviewSessionMemory sessionMemory
     ) {
-        this(inspectionService, evaluationService, patchService, sessionMemory, new SuppressionManager(), new DataflowTracker(), new IncrementalDiffScanner());
+        this(inspectionService, evaluationService, patchService, sessionMemory, new SuppressionManager(), new DataflowTracker(), new IncrementalDiffScanner(), new BaselineManager());
     }
 
     public SentinelAuditOrchestrator(
@@ -64,7 +70,7 @@ public class SentinelAuditOrchestrator {
             SuppressionManager suppressionManager,
             DataflowTracker dataflowTracker
     ) {
-        this(inspectionService, evaluationService, patchService, sessionMemory, suppressionManager, dataflowTracker, new IncrementalDiffScanner());
+        this(inspectionService, evaluationService, patchService, sessionMemory, suppressionManager, dataflowTracker, new IncrementalDiffScanner(), new BaselineManager());
     }
 
     public SentinelAuditOrchestrator(
@@ -76,6 +82,19 @@ public class SentinelAuditOrchestrator {
             DataflowTracker dataflowTracker,
             IncrementalDiffScanner diffScanner
     ) {
+        this(inspectionService, evaluationService, patchService, sessionMemory, suppressionManager, dataflowTracker, diffScanner, new BaselineManager());
+    }
+
+    public SentinelAuditOrchestrator(
+            CodeInspectionService inspectionService,
+            RuleEvaluationService evaluationService,
+            AutomatedPatchService patchService,
+            ReviewSessionMemory sessionMemory,
+            SuppressionManager suppressionManager,
+            DataflowTracker dataflowTracker,
+            IncrementalDiffScanner diffScanner,
+            BaselineManager baselineManager
+    ) {
         this.inspectionService = Objects.requireNonNull(inspectionService, "inspectionService must not be null");
         this.evaluationService = Objects.requireNonNull(evaluationService, "evaluationService must not be null");
         this.patchService = Objects.requireNonNull(patchService, "patchService must not be null");
@@ -83,6 +102,7 @@ public class SentinelAuditOrchestrator {
         this.suppressionManager = Objects.requireNonNull(suppressionManager, "suppressionManager must not be null");
         this.dataflowTracker = Objects.requireNonNull(dataflowTracker, "dataflowTracker must not be null");
         this.diffScanner = Objects.requireNonNull(diffScanner, "diffScanner must not be null");
+        this.baselineManager = Objects.requireNonNull(baselineManager, "baselineManager must not be null");
     }
 
     /**
@@ -379,6 +399,149 @@ public class SentinelAuditOrchestrator {
         );
     }
 
+    /**
+     * Executes review with baseline snapshot filtering. Known defects in the baseline
+     * are suppressed as {@code BASELINE_ACCEPTED}, and only new defects trigger active findings.
+     */
+    public ReviewReport auditPathWithBaseline(Path targetPath, Path baselinePath) throws IOException {
+        Objects.requireNonNull(baselinePath, "baselinePath must not be null");
+        BaselineSnapshot baseline = baselineManager.loadBaseline(baselinePath);
+        return auditPathWithBaseline(targetPath, baseline);
+    }
+
+    public ReviewReport auditPathWithBaseline(Path targetPath, BaselineSnapshot baseline) throws IOException {
+        Objects.requireNonNull(targetPath, "targetPath must not be null");
+        if (baseline == null || baseline.getEntries().isEmpty()) {
+            return auditPath(targetPath);
+        }
+
+        String reportId = "REV-" + UUID.randomUUID().toString().substring(0, 8);
+        if (!Files.exists(targetPath)) {
+            throw new IllegalArgumentException("Target path does not exist: " + targetPath);
+        }
+
+        List<InspectedSource> sources = inspectionService.inspectPath(targetPath);
+        List<SecurityFinding> allActiveFindings = new ArrayList<>();
+        List<SuppressedFinding> allSuppressedFindings = new ArrayList<>();
+        List<UnifiedDiffPatch> allPatches = new ArrayList<>();
+
+        for (InspectedSource source : sources) {
+            List<SecurityFinding> rawFindings = evaluationService.evaluate(source);
+            List<SecurityFinding> activeSourceFindings = new ArrayList<>();
+
+            for (SecurityFinding finding : rawFindings) {
+                SuppressionResult sup = suppressionManager.evaluateSuppression(finding, source, targetPath);
+                if (sup.isSuppressed()) {
+                    allSuppressedFindings.add(new SuppressedFinding(finding, sup.getReason(), sup.getType()));
+                } else {
+                    Optional<BaselineEntry> match = baseline.findMatchingEntry(finding);
+                    if (match.isPresent()) {
+                        String reason = String.format("Accepted technical debt present in baseline snapshot (fingerprint: %s)", match.get().getFingerprint());
+                        allSuppressedFindings.add(new SuppressedFinding(finding, reason, BaselineManager.SUPPRESSION_TYPE));
+                    } else {
+                        activeSourceFindings.add(finding);
+                    }
+                }
+            }
+
+            allActiveFindings.addAll(activeSourceFindings);
+
+            if (!activeSourceFindings.isEmpty()) {
+                List<UnifiedDiffPatch> patches = patchService.generatePatches(source, activeSourceFindings);
+                allPatches.addAll(patches);
+            }
+        }
+
+        String summary = String.format(
+                "Baseline-aware audit completed. Scanned %d source file(s), identified %d new active finding(s) (%d suppressed/baseline-accepted), synthesized %d verified patch(es).",
+                sources.size(), allActiveFindings.size(), allSuppressedFindings.size(), allPatches.size()
+        );
+
+        return new ReviewReport(
+                reportId,
+                Instant.now(),
+                targetPath.toString(),
+                sources.size(),
+                allActiveFindings.size(),
+                "SUCCESS",
+                false,
+                summary,
+                allActiveFindings,
+                allSuppressedFindings,
+                allPatches
+        );
+    }
+
+    /**
+     * Executes review combining both incremental PR diff filtering and baseline snapshot filtering.
+     */
+    public ReviewReport auditPathWithDiffAndBaseline(Path targetPath, String diffContent, Path baselinePath) throws IOException {
+        Objects.requireNonNull(targetPath, "targetPath must not be null");
+        if (baselinePath == null || !Files.exists(baselinePath)) {
+            return auditPathWithDiff(targetPath, diffContent);
+        }
+        if (diffContent == null || diffContent.isBlank()) {
+            return auditPathWithBaseline(targetPath, baselinePath);
+        }
+
+        String reportId = "REV-" + UUID.randomUUID().toString().substring(0, 8);
+        BaselineSnapshot baseline = baselineManager.loadBaseline(baselinePath);
+        Map<String, FileDiff> diffs = diffScanner.parse(diffContent);
+        List<InspectedSource> sources = inspectionService.inspectPath(targetPath);
+
+        List<SecurityFinding> allActiveFindings = new ArrayList<>();
+        List<SuppressedFinding> allSuppressedFindings = new ArrayList<>();
+        List<UnifiedDiffPatch> allPatches = new ArrayList<>();
+
+        for (InspectedSource source : sources) {
+            List<SecurityFinding> rawFindings = evaluationService.evaluate(source);
+            List<SecurityFinding> activeSourceFindings = new ArrayList<>();
+
+            for (SecurityFinding finding : rawFindings) {
+                SuppressionResult sup = suppressionManager.evaluateSuppression(finding, source, targetPath);
+                if (sup.isSuppressed()) {
+                    allSuppressedFindings.add(new SuppressedFinding(finding, sup.getReason(), sup.getType()));
+                } else if (!diffScanner.isFindingInDiff(finding, diffs)) {
+                    allSuppressedFindings.add(new SuppressedFinding(finding, "Baseline finding outside incremental PR diff range", "DIFF_BASELINE"));
+                } else {
+                    Optional<BaselineEntry> match = baseline.findMatchingEntry(finding);
+                    if (match.isPresent()) {
+                        String reason = String.format("Accepted technical debt present in baseline snapshot (fingerprint: %s)", match.get().getFingerprint());
+                        allSuppressedFindings.add(new SuppressedFinding(finding, reason, BaselineManager.SUPPRESSION_TYPE));
+                    } else {
+                        activeSourceFindings.add(finding);
+                    }
+                }
+            }
+
+            allActiveFindings.addAll(activeSourceFindings);
+
+            if (!activeSourceFindings.isEmpty()) {
+                List<UnifiedDiffPatch> patches = patchService.generatePatches(source, activeSourceFindings);
+                allPatches.addAll(patches);
+            }
+        }
+
+        String summary = String.format(
+                "Incremental diff & baseline audit completed. Scanned %d source file(s), identified %d net-new active finding(s) (%d suppressed/baseline), synthesized %d verified patch(es).",
+                sources.size(), allActiveFindings.size(), allSuppressedFindings.size(), allPatches.size()
+        );
+
+        return new ReviewReport(
+                reportId,
+                Instant.now(),
+                targetPath.toString(),
+                sources.size(),
+                allActiveFindings.size(),
+                "SUCCESS",
+                false,
+                summary,
+                allActiveFindings,
+                allSuppressedFindings,
+                allPatches
+        );
+    }
+
     public CodeInspectionService getInspectionService() {
         return inspectionService;
     }
@@ -405,5 +568,9 @@ public class SentinelAuditOrchestrator {
 
     public IncrementalDiffScanner getDiffScanner() {
         return diffScanner;
+    }
+
+    public BaselineManager getBaselineManager() {
+        return baselineManager;
     }
 }

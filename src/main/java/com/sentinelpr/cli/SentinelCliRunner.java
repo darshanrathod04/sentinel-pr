@@ -12,6 +12,12 @@ import com.sentinelpr.core.model.SuppressedFinding;
 import com.sentinelpr.core.model.UnifiedDiffPatch;
 import com.sentinelpr.core.export.github.PrReviewCommentBuilder;
 import com.sentinelpr.core.export.sarif.SarifReportGenerator;
+import com.sentinelpr.core.governance.audit.AuditTrailEntry;
+import com.sentinelpr.core.governance.audit.AuditTrailLogger;
+import com.sentinelpr.core.governance.baseline.BaselineManager;
+import com.sentinelpr.core.governance.policy.PolicyEngine;
+import com.sentinelpr.core.governance.policy.PolicyEvaluationResult;
+import com.sentinelpr.core.governance.policy.SentinelPolicy;
 import com.sentinelpr.core.service.AutomatedPatchService;
 import com.sentinelpr.core.service.CodeInspectionService;
 import com.sentinelpr.core.service.PatchComposer;
@@ -28,14 +34,17 @@ import java.util.Objects;
  * <b>SentinelCliRunner</b>
  *
  * <p>Command-line runner for SentinelPR. Accepts a target Java source file or directory,
- * executes AST rule evaluation, incremental diff filtering, and verified patch synthesis,
- * with options for SARIF v2.1.0 report generation and PR review payloads.</p>
+ * executes AST rule evaluation, incremental diff filtering, technical debt baseline tracking,
+ * verified patch synthesis, enterprise policy enforcement, and cryptographic audit trail logging.</p>
  */
 public class SentinelCliRunner {
 
     private final SentinelAuditOrchestrator orchestrator;
     private final SarifReportGenerator sarifGenerator;
     private final PrReviewCommentBuilder reviewCommentBuilder;
+    private final BaselineManager baselineManager;
+    private final PolicyEngine policyEngine;
+    private final AuditTrailLogger auditTrailLogger;
     private final ObjectMapper objectMapper;
 
     public SentinelCliRunner() {
@@ -43,7 +52,7 @@ public class SentinelCliRunner {
     }
 
     public SentinelCliRunner(SentinelAuditOrchestrator orchestrator) {
-        this(orchestrator, new SarifReportGenerator(), new PrReviewCommentBuilder());
+        this(orchestrator, new SarifReportGenerator(), new PrReviewCommentBuilder(), new BaselineManager(), new PolicyEngine(), new AuditTrailLogger());
     }
 
     public SentinelCliRunner(
@@ -51,9 +60,23 @@ public class SentinelCliRunner {
             SarifReportGenerator sarifGenerator,
             PrReviewCommentBuilder reviewCommentBuilder
     ) {
+        this(orchestrator, sarifGenerator, reviewCommentBuilder, new BaselineManager(), new PolicyEngine(), new AuditTrailLogger());
+    }
+
+    public SentinelCliRunner(
+            SentinelAuditOrchestrator orchestrator,
+            SarifReportGenerator sarifGenerator,
+            PrReviewCommentBuilder reviewCommentBuilder,
+            BaselineManager baselineManager,
+            PolicyEngine policyEngine,
+            AuditTrailLogger auditTrailLogger
+    ) {
         this.orchestrator = Objects.requireNonNull(orchestrator, "orchestrator must not be null");
         this.sarifGenerator = Objects.requireNonNull(sarifGenerator, "sarifGenerator must not be null");
         this.reviewCommentBuilder = Objects.requireNonNull(reviewCommentBuilder, "reviewCommentBuilder must not be null");
+        this.baselineManager = Objects.requireNonNull(baselineManager, "baselineManager must not be null");
+        this.policyEngine = Objects.requireNonNull(policyEngine, "policyEngine must not be null");
+        this.auditTrailLogger = Objects.requireNonNull(auditTrailLogger, "auditTrailLogger must not be null");
         this.objectMapper = new ObjectMapper()
                 .registerModule(new JavaTimeModule())
                 .enable(SerializationFeature.INDENT_OUTPUT);
@@ -77,6 +100,36 @@ public class SentinelCliRunner {
         );
     }
 
+    public static class CliExecutionResult {
+        private final int exitCode;
+        private final ReviewReport report;
+        private final PolicyEvaluationResult policyResult;
+        private final AuditTrailEntry auditEntry;
+
+        public CliExecutionResult(int exitCode, ReviewReport report, PolicyEvaluationResult policyResult, AuditTrailEntry auditEntry) {
+            this.exitCode = exitCode;
+            this.report = report;
+            this.policyResult = policyResult;
+            this.auditEntry = auditEntry;
+        }
+
+        public int getExitCode() {
+            return exitCode;
+        }
+
+        public ReviewReport getReport() {
+            return report;
+        }
+
+        public PolicyEvaluationResult getPolicyResult() {
+            return policyResult;
+        }
+
+        public AuditTrailEntry getAuditEntry() {
+            return auditEntry;
+        }
+    }
+
     /**
      * Executes review and prints structured JSON report to stdout.
      *
@@ -97,10 +150,46 @@ public class SentinelCliRunner {
      * @return generated ReviewReport
      */
     public ReviewReport run(Path targetPath, Path diffPath, Path sarifOutputPath, String format) {
+        return run(targetPath, diffPath, null, null, null, sarifOutputPath, null, format);
+    }
+
+    /**
+     * Executes review with full governance suite options.
+     */
+    public ReviewReport run(
+            Path targetPath,
+            Path diffPath,
+            Path baselinePath,
+            Path createBaselinePath,
+            Path policyPath,
+            Path sarifOutputPath,
+            Path auditLogPath,
+            String format
+    ) {
+        CliExecutionResult result = execute(targetPath, diffPath, baselinePath, createBaselinePath, policyPath, sarifOutputPath, auditLogPath, format);
+        if (result.getExitCode() == 2) {
+            throw new RuntimeException("CLI execution failed");
+        }
+        return result.getReport();
+    }
+
+    /**
+     * Executes review with full governance evaluation, returning structured {@link CliExecutionResult}.
+     */
+    public CliExecutionResult execute(
+            Path targetPath,
+            Path diffPath,
+            Path baselinePath,
+            Path createBaselinePath,
+            Path policyPath,
+            Path sarifOutputPath,
+            Path auditLogPath,
+            String format
+    ) {
         try {
-            if (!Files.exists(targetPath)) {
-                System.err.println("[SentinelPR:CLI] Error: Target path not found: " + targetPath.toAbsolutePath());
-                System.exit(1);
+            if (targetPath == null || !Files.exists(targetPath)) {
+                System.err.println("[SentinelPR:CLI] Error: Target path not found: " + (targetPath != null ? targetPath.toAbsolutePath() : "null"));
+                return new CliExecutionResult(2, null, null, null);
             }
 
             System.out.println("================================================================================");
@@ -110,11 +199,25 @@ public class SentinelCliRunner {
             if (diffPath != null) {
                 System.out.println(" Diff:   " + diffPath.toAbsolutePath());
             }
+            if (baselinePath != null) {
+                System.out.println(" Baseline: " + baselinePath.toAbsolutePath());
+            }
+            if (policyPath != null) {
+                System.out.println(" Policy:   " + policyPath.toAbsolutePath());
+            }
             System.out.println("================================================================================");
 
-            ReviewReport report = (diffPath != null && Files.exists(diffPath))
-                    ? orchestrator.auditPathWithDiff(targetPath, diffPath)
-                    : orchestrator.auditPath(targetPath);
+            // Audit dispatch
+            ReviewReport report;
+            if (diffPath != null && Files.exists(diffPath) && baselinePath != null && Files.exists(baselinePath)) {
+                report = orchestrator.auditPathWithDiffAndBaseline(targetPath, Files.readString(diffPath), baselinePath);
+            } else if (baselinePath != null && Files.exists(baselinePath)) {
+                report = orchestrator.auditPathWithBaseline(targetPath, baselinePath);
+            } else if (diffPath != null && Files.exists(diffPath)) {
+                report = orchestrator.auditPathWithDiff(targetPath, diffPath);
+            } else {
+                report = orchestrator.auditPath(targetPath);
+            }
 
             System.out.println("\n--- [Audit Execution Summary] ---");
             System.out.println("Status:          " + report.getStatus());
@@ -154,13 +257,19 @@ public class SentinelCliRunner {
                 }
             }
 
+            // Export baseline snapshot if requested
+            if (createBaselinePath != null) {
+                baselineManager.exportBaseline(report, createBaselinePath);
+                System.out.println("\n[SentinelPR:CLI] Baseline snapshot captured to: " + createBaselinePath.toAbsolutePath());
+            }
+
             // Export SARIF if requested
             if (sarifOutputPath != null) {
                 sarifGenerator.exportToFile(report, sarifOutputPath);
                 System.out.println("\n[SentinelPR:CLI] SARIF v2.1.0 report exported to: " + sarifOutputPath.toAbsolutePath());
             }
 
-            // Format output to stdout
+            // Output format to stdout
             String effectiveFormat = format != null ? format.toLowerCase() : "json";
             switch (effectiveFormat) {
                 case "sarif" -> {
@@ -180,32 +289,80 @@ public class SentinelCliRunner {
                 }
             }
 
-            return report;
+            // Policy evaluation
+            PolicyEvaluationResult policyResult = null;
+            int exitCode = 0;
+            if (policyPath != null) {
+                SentinelPolicy policy = policyEngine.loadPolicy(policyPath);
+                policyResult = policyEngine.evaluate(report, policy);
+
+                if (policyResult.isBreached()) {
+                    exitCode = 1;
+                    System.err.println("\n--- [Enterprise Policy Evaluation: BREACHED] ---");
+                    System.err.println(policyResult.getSummary());
+                    for (String violation : policyResult.getViolations()) {
+                        System.err.println("  ❌ " + violation);
+                    }
+                } else {
+                    System.out.println("\n--- [Enterprise Policy Evaluation: PASSED] ---");
+                    System.out.println(policyResult.getSummary());
+                }
+            }
+
+            // Cryptographic audit log
+            AuditTrailEntry auditEntry = null;
+            if (auditLogPath != null) {
+                auditEntry = auditTrailLogger.createAuditEntry(report, policyResult, "HEAD", "main", null);
+                auditTrailLogger.appendAuditLog(auditEntry, auditLogPath);
+                System.out.println("\n[SentinelPR:CLI] Cryptographic audit trail appended to: " + auditLogPath.toAbsolutePath());
+            }
+
+            return new CliExecutionResult(exitCode, report, policyResult, auditEntry);
 
         } catch (Exception e) {
-            System.err.println("[SentinelPR:CLI] Review failed: " + e.getMessage());
+            System.err.println("[SentinelPR:CLI] Execution error: " + e.getMessage());
             e.printStackTrace(System.err);
-            throw new RuntimeException("CLI execution failed", e);
+            return new CliExecutionResult(2, null, null, null);
         }
     }
 
-    public static void main(String[] args) {
-        if (args.length < 1) {
+    /**
+     * Executes CLI from command-line arguments string array, returning process exit code:
+     * <ul>
+     *   <li>0: Audit passed & policy compliant</li>
+     *   <li>1: Policy breached</li>
+     *   <li>2: Execution error or invalid configuration</li>
+     * </ul>
+     */
+    public int execute(String[] args) {
+        if (args == null || args.length < 1) {
             printUsage();
-            System.exit(1);
+            return 2;
         }
 
         Path target = null;
         Path diffPath = null;
+        Path baselinePath = null;
+        Path createBaselinePath = null;
+        Path policyPath = null;
         Path sarifPath = null;
+        Path auditLogPath = null;
         String format = "json";
 
         for (int i = 0; i < args.length; i++) {
             String arg = args[i];
             if ("--diff".equalsIgnoreCase(arg) && i + 1 < args.length) {
                 diffPath = Path.of(args[++i]);
+            } else if ("--baseline".equalsIgnoreCase(arg) && i + 1 < args.length) {
+                baselinePath = Path.of(args[++i]);
+            } else if ("--create-baseline".equalsIgnoreCase(arg) && i + 1 < args.length) {
+                createBaselinePath = Path.of(args[++i]);
+            } else if ("--policy".equalsIgnoreCase(arg) && i + 1 < args.length) {
+                policyPath = Path.of(args[++i]);
             } else if ("--sarif".equalsIgnoreCase(arg) && i + 1 < args.length) {
                 sarifPath = Path.of(args[++i]);
+            } else if ("--audit-log".equalsIgnoreCase(arg) && i + 1 < args.length) {
+                auditLogPath = Path.of(args[++i]);
             } else if (("-f".equalsIgnoreCase(arg) || "--format".equalsIgnoreCase(arg)) && i + 1 < args.length) {
                 format = args[++i];
             } else if (!arg.startsWith("-")) {
@@ -215,18 +372,40 @@ public class SentinelCliRunner {
 
         if (target == null) {
             printUsage();
-            System.exit(1);
+            return 2;
         }
 
+        CliExecutionResult result = execute(target, diffPath, baselinePath, createBaselinePath, policyPath, sarifPath, auditLogPath, format);
+        return result.getExitCode();
+    }
+
+    public static void main(String[] args) {
         SentinelCliRunner runner = new SentinelCliRunner();
-        runner.run(target, diffPath, sarifPath, format);
+        int exitCode = runner.execute(args);
+        System.exit(exitCode);
     }
 
     private static void printUsage() {
         System.out.println("Usage: java -jar sentinel-pr.jar <target-path> [options]");
         System.out.println("Options:");
-        System.out.println("  --diff <patch-file>        Enable incremental git diff scanning");
-        System.out.println("  --sarif <output-file>      Export OASIS SARIF v2.1.0 report");
-        System.out.println("  -f, --format <format>      Output format (json, sarif, github, text) [default: json]");
+        System.out.println("  --diff <patch-file>            Enable incremental git diff scanning");
+        System.out.println("  --baseline <baseline-file>     Filter findings against technical debt baseline");
+        System.out.println("  --create-baseline <out.json>   Export findings as technical debt baseline snapshot");
+        System.out.println("  --policy <policy-file>         Enforce enterprise compliance policy thresholds");
+        System.out.println("  --sarif <output-file>          Export OASIS SARIF v2.1.0 report");
+        System.out.println("  --audit-log <ledger.log>       Append signed cryptographic SOC2/ISO27001 audit entry");
+        System.out.println("  -f, --format <format>          Output format (json, sarif, github, text) [default: json]");
+    }
+
+    public BaselineManager getBaselineManager() {
+        return baselineManager;
+    }
+
+    public PolicyEngine getPolicyEngine() {
+        return policyEngine;
+    }
+
+    public AuditTrailLogger getAuditTrailLogger() {
+        return auditTrailLogger;
     }
 }

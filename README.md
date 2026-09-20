@@ -99,6 +99,9 @@ SentinelPR leverages the 10-SDK cognitive kernel surface provided by **Shree AI 
 - **Structured GitHub PR Review Synthesis (`PrReviewCommentBuilder`)**: Synthesizes GitHub Pull Request Review API payloads with inline comment alerts (`> [!CAUTION]`, `> [!WARNING]`), collapsible ````suggestion```` unified diff blocks, and an executive markdown summary table.
 - **Atomic Patch Composition (`PatchComposer`)**: Sequentially applies all verified AST transformations in-memory to generate ONE non-conflicting unified diff per file.
 - **Post-Patch Regression Verification (`PatchVerifier`)**: Re-parses patched code with `JavaAstParser` and re-evaluates all security rules to guarantee 0 critical vulnerabilities remain, setting `regressionVerified: true`.
+- **Baseline Technical Debt Engine (`BaselineManager`)**: Captures repository debt snapshots into `.sentinelbaseline.json`, fingerprinting findings by SHA-256 or structural proximity to suppress legacy defects as `BASELINE_ACCEPTED` while blocking net-new defects.
+- **Enterprise Policy Enforcement Engine (`PolicyEngine`)**: Configurable compliance thresholds (`maxAllowedCritical`, `maxAllowedHigh`, `maxAllowedMedium`), strictly blocked rules, and unverified patch guards with deterministic exit codes (`0`: Pass, `1`: Breached, `2`: Error).
+- **Cryptographic Audit Trail & Compliance Logging (`AuditTrailLogger`)**: Generates append-only NDJSON audit ledger entries for SOC2-CC7.1 and ISO27001 compliance with UTC ISO-8601 timestamps, operator identity, input SHA-256 fingerprint, and verifiable report integrity signatures.
 - **Multi-Modal Audit Intake**: Accepts either filesystem paths (individual files or whole directories) or raw source code strings over HTTP.
 - **Java 21 LTS Compliant**: Native support for modern Java 21 language constructs (virtual threads, pattern matching, record patterns).
 - **High Concurrency & In-Memory Deduplication**: Thread-safe content-addressable SHA-256 session memory via Shree AI OS `MemorySDK`.
@@ -124,7 +127,7 @@ mvn -version
 
 ### 1. Run Automated Test Suite
 
-SentinelPR includes comprehensive unit and integration tests validating rule evaluation, patch synthesis, AST verification, diff filtering, SARIF compliance, and memory deduplication:
+SentinelPR includes comprehensive unit and integration tests validating rule evaluation, patch synthesis, AST verification, diff filtering, SARIF compliance, baseline management, enterprise policy enforcement, and cryptographic audit logging:
 
 ```bash
 mvn clean test
@@ -140,7 +143,9 @@ Expected output:
 [INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0
 [INFO] Running com.sentinelpr.SentinelPrP2WorkflowVerificationTest
 [INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0
-[INFO] BUILD SUCCESS
+[INFO] Running com.sentinelpr.SentinelPrP3GovernanceVerificationTest
+[INFO] Tests run: 6, Failures: 0, Errors: 0, Skipped: 0
+[INFO] BUILD SUCCESS (23 tests passed, 0 failures)
 ```
 
 ### 2. Execute CLI Audit
@@ -152,12 +157,20 @@ Audit any Java source file or project tree directly using the CLI runner:
 java -jar target/sentinel-pr-1.0.0.jar src/test/java/com/sentinelpr/fixture/VulnerableService.java
 ```
 
-#### Incremental PR Diff Scan with SARIF Export:
+#### Enterprise Governance Audit with Baseline, Policy, SARIF & Audit Log:
 ```bash
 java -jar target/sentinel-pr-1.0.0.jar src/test/java/com/sentinelpr/fixture/VulnerableService.java \
-  --diff src/test/resources/SampleIncrementalDiff.patch \
+  --baseline .sentinelbaseline.json \
+  --policy src/test/resources/SamplePolicy.json \
   --sarif target/sentinel-report.sarif \
+  --audit-log target/audit-ledger.log \
   --format sarif
+```
+
+#### Capture New Baseline Snapshot:
+```bash
+java -jar target/sentinel-pr-1.0.0.jar src/test/java/com/sentinelpr/fixture/VulnerableService.java \
+  --create-baseline .sentinelbaseline.json
 ```
 
 #### CLI Options:
@@ -165,7 +178,11 @@ java -jar target/sentinel-pr-1.0.0.jar src/test/java/com/sentinelpr/fixture/Vuln
 |---|---|---|
 | `<target-path>` | Positional path to Java source file or directory | *(Required)* |
 | `--diff <patch-file>` | Unified diff file for incremental scanning | Full scan |
+| `--baseline <baseline-file>` | Technical debt snapshot file to filter accepted findings | None |
+| `--create-baseline <out.json>` | Export discovered findings as a new debt baseline snapshot | None |
+| `--policy <policy-file>` | Enforce enterprise compliance thresholds (exit code 1 on breach) | None |
 | `--sarif <output-file>` | Path to write OASIS SARIF v2.1.0 JSON report | None |
+| `--audit-log <ledger.log>` | Append signed cryptographic SOC2/ISO27001 audit entry | None |
 | `-f, --format <format>` | Output format on stdout (`json`, `sarif`, `github`, `text`) | `json` |
 
 ### 3. Start REST API Server
@@ -215,6 +232,26 @@ curl -X POST http://localhost:8080/api/v1/sentinel/review/sarif \
 curl -X POST http://localhost:8080/api/v1/sentinel/review/github \
   -H "Content-Type: application/json" \
   -d '{"targetPath": "src/test/java/com/sentinelpr/fixture/VulnerableService.java"}'
+```
+
+#### Enterprise Policy Evaluation Endpoint:
+```bash
+curl -X POST http://localhost:8080/api/v1/sentinel/policy/evaluate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "targetPath": "src/test/java/com/sentinelpr/fixture/VulnerableService.java",
+    "policy": {
+      "policyName": "Strict-Gate",
+      "maxAllowedCritical": 0,
+      "maxAllowedHigh": 0,
+      "blockedRules": ["SEC-001-FAIL-OPEN"]
+    }
+  }'
+```
+
+#### Governance Engine Status & Standards:
+```bash
+curl -X GET http://localhost:8080/api/v1/sentinel/governance/status
 ```
 
 ---

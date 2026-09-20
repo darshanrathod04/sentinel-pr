@@ -1,0 +1,41 @@
+{
+  "version": "1.0",
+  "createdAt": "2026-09-21T00:00:00Z",
+  "targetPath": "src/test/java/com/sentinelpr/fixture/VulnerableService.java",
+  "totalEntries": 3,
+  "entries": [
+    {
+      "fingerprint": "b01-sec001-fail-open-fp",
+      "filePath": "src/test/java/com/sentinelpr/fixture/VulnerableService.java",
+      "ruleId": "SEC-001-FAIL-OPEN",
+      "startLine": 36,
+      "endLine": 39,
+      "className": "VulnerableService",
+      "methodName": "checkUserAuthorization",
+      "snippet": "return true;",
+      "capturedAt": "2026-09-21T00:00:00Z"
+    },
+    {
+      "fingerprint": "b02-sec002-stream-fp",
+      "filePath": "src/test/java/com/sentinelpr/fixture/VulnerableService.java",
+      "ruleId": "SEC-002-UNCLOSED-STREAM",
+      "startLine": 20,
+      "endLine": 25,
+      "className": "VulnerableService",
+      "methodName": "readConfigurationData",
+      "snippet": "FileInputStream fis = new FileInputStream(configFile);",
+      "capturedAt": "2026-09-21T00:00:00Z"
+    },
+    {
+      "fingerprint": "b03-sec003-volatile-fp",
+      "filePath": "src/test/java/com/sentinelpr/fixture/VulnerableService.java",
+      "ruleId": "SEC-003-VOLATILE-COMPOUND",
+      "startLine": 45,
+      "endLine": 47,
+      "className": "VulnerableService",
+      "methodName": "trackRequest",
+      "snippet": "requestCount++;",
+      "capturedAt": "2026-09-21T00:00:00Z"
+    }
+  ]
+}

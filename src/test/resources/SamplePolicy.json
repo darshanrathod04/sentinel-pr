@@ -1,0 +1,15 @@
+{
+  "policyName": "Enterprise-Strict-Security-Policy",
+  "version": "1.0",
+  "maxAllowedCritical": 0,
+  "maxAllowedHigh": 0,
+  "maxAllowedMedium": 5,
+  "failOnUnverifiedPatch": true,
+  "blockedRules": [
+    "SEC-001-FAIL-OPEN"
+  ],
+  "requiredTags": [
+    "OWASP-TOP-10",
+    "SOC2-CC7.1"
+  ]
+}
