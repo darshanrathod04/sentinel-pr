@@ -1,0 +1,4 @@
+com\sentinelpr\fixture\VulnerableService.class
+com\sentinelpr\fixture\TaintedVulnerableService.class
+com\sentinelpr\SentinelPrApplicationTest.class
+com\sentinelpr\SentinelPrP0VerificationTest.class
