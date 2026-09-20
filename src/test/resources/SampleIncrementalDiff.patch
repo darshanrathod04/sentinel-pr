@@ -1,0 +1,18 @@
+diff --git a/src/test/java/com/sentinelpr/fixture/VulnerableService.java b/src/test/java/com/sentinelpr/fixture/VulnerableService.java
+index 1234567..89abcdef 100644
+--- a/src/test/java/com/sentinelpr/fixture/VulnerableService.java
++++ b/src/test/java/com/sentinelpr/fixture/VulnerableService.java
+@@ -30,10 +30,11 @@ public class VulnerableService {
+     public boolean checkUserAuthorization(String userId, String requiredRole) {
+         try {
+             if (userId == null || userId.isBlank()) {
+                 throw new NullPointerException("User identity is null");
+             }
+-            return userId.equals("admin") && requiredRole.equals("SUPERUSER");
++            // PR change: modified user authorization check
++            return userId.equalsIgnoreCase("admin") && requiredRole.equals("SUPERUSER");
+         } catch (NullPointerException e) {
+             // VULNERABLE: Fail-open security block returns true on error
+             return true;
+         }
+     }

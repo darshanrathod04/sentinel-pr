@@ -94,6 +94,9 @@ SentinelPR leverages the 10-SDK cognitive kernel surface provided by **Shree AI 
 
 - **Intra-Procedural Taint & Dataflow Engine (`DataflowTracker`)**: Traces untrusted sources (parameters, HTTP inputs) through assignments, method invocations, and returns to sensitive sinks (ProcessBuilder, Runtime.exec, FileInputStream, raw SQL), tracking sanitization guards.
 - **False Positive Suppression Engine (`SuppressionManager`)**: Granular policy suppression via `@SuppressWarnings("sentinel:<RULE_ID>")`, inline comments (`// sentinel-ignore <RULE_ID> [reason]`), and repository `.sentinelignore` files, recorded in reports as `suppressedFindings`.
+- **Incremental PR Diff Range Filtering (`IncrementalDiffScanner`)**: Parses unified diff hunk intervals (`@@ -l,s +l,s @@`) to restrict PR blockages strictly to lines added or modified in the pull request, classifying legacy defects outside the diff hunks as baseline (`DIFF_BASELINE`).
+- **OASIS SARIF v2.1.0 Report Exporter (`SarifReportGenerator`)**: Produces schema-compliant SARIF 2.1.0 JSON documents (`https://json.schemastore.org/sarif-2.1.0.json`) with comprehensive rules catalog (`SEC-001` through `SEC-010`), line regions, and verified patch properties for GitHub Code Scanning and GitLab SAST.
+- **Structured GitHub PR Review Synthesis (`PrReviewCommentBuilder`)**: Synthesizes GitHub Pull Request Review API payloads with inline comment alerts (`> [!CAUTION]`, `> [!WARNING]`), collapsible ````suggestion```` unified diff blocks, and an executive markdown summary table.
 - **Atomic Patch Composition (`PatchComposer`)**: Sequentially applies all verified AST transformations in-memory to generate ONE non-conflicting unified diff per file.
 - **Post-Patch Regression Verification (`PatchVerifier`)**: Re-parses patched code with `JavaAstParser` and re-evaluates all security rules to guarantee 0 critical vulnerabilities remain, setting `regressionVerified: true`.
 - **Multi-Modal Audit Intake**: Accepts either filesystem paths (individual files or whole directories) or raw source code strings over HTTP.
@@ -121,7 +124,7 @@ mvn -version
 
 ### 1. Run Automated Test Suite
 
-SentinelPR includes comprehensive unit and integration tests validating rule evaluation, patch synthesis, AST verification, and memory deduplication:
+SentinelPR includes comprehensive unit and integration tests validating rule evaluation, patch synthesis, AST verification, diff filtering, SARIF compliance, and memory deduplication:
 
 ```bash
 mvn clean test
@@ -130,41 +133,40 @@ mvn clean test
 Expected output:
 ```text
 [INFO] Running com.sentinelpr.SentinelPrApplicationTest
-[SentinelPR] No GEMINI_API_KEY provided; operating in deterministic in-memory provider mode.
-[SentinelPR:Memory] Recorded audit session into Memory Kernel for f15a5433f40d
-[TEST PASSED] SentinelPR Report Summary: Audit completed. Scanned 1 source file(s), identified 3 vulnerability finding(s), synthesized 3 verified patch(es).
-[TEST PATCH GENERATED for SEC-001-FAIL-OPEN]: ...
-[TEST PATCH GENERATED for SEC-002-UNCLOSED-STREAM]: ...
-[TEST PATCH GENERATED for SEC-003-VOLATILE-COMPOUND]: ...
 [INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0
+[INFO] Running com.sentinelpr.SentinelPrP0VerificationTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0
+[INFO] Running com.sentinelpr.SentinelPrP1SecurityVerificationTest
+[INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0
+[INFO] Running com.sentinelpr.SentinelPrP2WorkflowVerificationTest
+[INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0
 [INFO] BUILD SUCCESS
 ```
 
 ### 2. Execute CLI Audit
 
-Audit any Java source file or project tree directly using the Maven `exec:java` runner:
+Audit any Java source file or project tree directly using the CLI runner:
 
-#### On Linux / macOS / Bash:
+#### Standard CLI Scan:
 ```bash
-mvn test-compile exec:java \
-  -Dexec.mainClass="com.sentinelpr.cli.SentinelCliRunner" \
-  -Dexec.classpathScope=test \
-  -Dexec.args="src/test/java/com/sentinelpr/fixture/VulnerableService.java"
-```
-
-#### On Windows (PowerShell):
-```powershell
-mvn test-compile exec:java `
-  "-Dexec.mainClass=com.sentinelpr.cli.SentinelCliRunner" `
-  "-Dexec.classpathScope=test" `
-  "-Dexec.args=src/test/java/com/sentinelpr/fixture/VulnerableService.java"
-```
-
-#### Running via Packaged Standalone JAR:
-```bash
-mvn clean package -DskipTests
 java -jar target/sentinel-pr-1.0.0.jar src/test/java/com/sentinelpr/fixture/VulnerableService.java
 ```
+
+#### Incremental PR Diff Scan with SARIF Export:
+```bash
+java -jar target/sentinel-pr-1.0.0.jar src/test/java/com/sentinelpr/fixture/VulnerableService.java \
+  --diff src/test/resources/SampleIncrementalDiff.patch \
+  --sarif target/sentinel-report.sarif \
+  --format sarif
+```
+
+#### CLI Options:
+| Flag | Description | Default |
+|---|---|---|
+| `<target-path>` | Positional path to Java source file or directory | *(Required)* |
+| `--diff <patch-file>` | Unified diff file for incremental scanning | Full scan |
+| `--sarif <output-file>` | Path to write OASIS SARIF v2.1.0 JSON report | None |
+| `-f, --format <format>` | Output format on stdout (`json`, `sarif`, `github`, `text`) | `json` |
 
 ### 3. Start REST API Server
 
@@ -187,13 +189,30 @@ Output:
   "service": "SentinelPR - Enterprise Code & Security Review Copilot",
   "status": "UP",
   "platform": "Shree AI OS (1.0.6-developer-preview)",
-  "rules": 4
+  "rules": 10
 }
 ```
 
-#### Trigger a Review Request:
+#### Standard Review Request:
 ```bash
 curl -X POST http://localhost:8080/api/v1/sentinel/review \
+  -H "Content-Type: application/json" \
+  -d '{"targetPath": "src/test/java/com/sentinelpr/fixture/VulnerableService.java"}'
+```
+
+#### Incremental PR Review with SARIF Output:
+```bash
+curl -X POST http://localhost:8080/api/v1/sentinel/review/sarif \
+  -H "Content-Type: application/json" \
+  -d '{
+    "targetPath": "src/test/java/com/sentinelpr/fixture/VulnerableService.java",
+    "diffContent": "diff --git a/... b/...\n@@ -30,10 +30,11 @@\n..."
+  }'
+```
+
+#### GitHub PR Review Payload Endpoint:
+```bash
+curl -X POST http://localhost:8080/api/v1/sentinel/review/github \
   -H "Content-Type: application/json" \
   -d '{"targetPath": "src/test/java/com/sentinelpr/fixture/VulnerableService.java"}'
 ```
