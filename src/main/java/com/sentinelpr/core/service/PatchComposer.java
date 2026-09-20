@@ -113,6 +113,12 @@ public class PatchComposer {
             case UNCLOSED_IO_STREAM -> 2;
             case FAIL_OPEN_SECURITY -> 3;
             case UNISOLATED_SUBPROCESS -> 4;
+            case SQL_INJECTION -> 5;
+            case PATH_TRAVERSAL -> 6;
+            case INSECURE_DESERIALIZATION -> 7;
+            case HARDCODED_SECRET -> 8;
+            case SPRING_SECURITY_CSRF_DISABLED -> 9;
+            case SPRING_PERMISSIVE_CORS -> 10;
         };
     }
 
@@ -123,6 +129,12 @@ public class PatchComposer {
             case UNCLOSED_IO_STREAM -> composeUnclosedStream(source, finding);
             case FAIL_OPEN_SECURITY -> composeFailOpenSecurity(source, finding);
             case UNISOLATED_SUBPROCESS -> composeSubprocess(source, finding);
+            case SQL_INJECTION -> composeSqlInjection(source, finding);
+            case PATH_TRAVERSAL -> composePathTraversal(source, finding);
+            case INSECURE_DESERIALIZATION -> composeInsecureDeserialization(source, finding);
+            case HARDCODED_SECRET -> composeHardcodedSecret(source, finding);
+            case SPRING_SECURITY_CSRF_DISABLED -> composeCsrfDisabled(source, finding);
+            case SPRING_PERMISSIVE_CORS -> composePermissiveCors(source, finding);
         };
     }
 
@@ -328,6 +340,158 @@ public class PatchComposer {
 
     private String composeSubprocess(String source, SecurityFinding finding) {
         String patched = source.replace("Runtime.getRuntime().exec(", "new ProcessBuilder(");
+        if (isValidJava(patched)) {
+            return patched;
+        }
+        return source;
+    }
+
+    // ─── Transformation: SQL Injection -> Parameterized Query ───────────────
+
+    private String composeSqlInjection(String source, SecurityFinding finding) {
+        Pattern sqlConcatPattern = Pattern.compile("(?i)(\"\\s*SELECT\\s+[^\"\\n]+WHERE\\s+[^\"\\n]+=\\s*['\"]?\\s*\\+\\s*([a-zA-Z0-9_]+)(?:\\s*\\+\\s*['\"][^\"\\n]*['\"])?)");
+        Matcher m = sqlConcatPattern.matcher(source);
+        if (m.find()) {
+            String fullMatch = m.group(1);
+            String prefix = fullMatch.split("=")[0] + "= ?";
+            if (prefix.startsWith("\"")) {
+                prefix = prefix + "\"";
+            } else {
+                prefix = "\"" + prefix + "\"";
+            }
+            String patched = source.replace(fullMatch, prefix);
+            if (isValidJava(patched)) {
+                return patched;
+            }
+        }
+
+        String snippet = finding.getVulnerableSnippet();
+        if (snippet != null && source.contains(snippet)) {
+            String safeSnippet = snippet.replaceAll("['\"]?\\s*\\+\\s*[a-zA-Z0-9_]+\\s*\\+\\s*['\"]?", "?");
+            String candidate = source.replace(snippet, safeSnippet);
+            if (isValidJava(candidate)) return candidate;
+        }
+
+        return source;
+    }
+
+    // ─── Transformation: Path Traversal -> Bounds Check ─────────────────────
+
+    private String composePathTraversal(String source, SecurityFinding finding) {
+        String[] lines = source.split("\\r?\\n", -1);
+        int targetIdx = finding.getStartLine() - 1;
+
+        if (targetIdx >= 0 && targetIdx < lines.length) {
+            String line = lines[targetIdx];
+            String indent = extractIndent(line);
+            // Case A: File file = new File(baseDir, filename);
+            if (line.matches(".*\\bFile\\s+(\\w+)\\s*=\\s*new\\s+File\\s*\\(\\s*(\\w+)\\s*,\\s*(\\w+)\\s*\\)\\s*;.*")) {
+                Pattern p = Pattern.compile(".*\\bFile\\s+(\\w+)\\s*=\\s*new\\s+File\\s*\\(\\s*(\\w+)\\s*,\\s*(\\w+)\\s*\\)\\s*;.*");
+                Matcher m = p.matcher(line);
+                if (m.find()) {
+                    String fileVar = m.group(1);
+                    String baseVar = m.group(2);
+                    String fileArg = m.group(3);
+                    String replacement = indent + "File " + fileVar + " = new File(" + baseVar + ", " + fileArg + ").getCanonicalFile();\n"
+                            + indent + "if (!" + fileVar + ".toPath().startsWith(" + baseVar + ".toPath().normalize())) {\n"
+                            + indent + "    throw new SecurityException(\"Path traversal attempt detected\");\n"
+                            + indent + "}";
+                    lines[targetIdx] = replacement;
+                    String result = String.join("\n", lines);
+                    if (isValidJava(result)) return result;
+                }
+            }
+            // Case B: Path target = Path.of(basePath, userPath);
+            if (line.matches(".*\\bPath\\s+(\\w+)\\s*=\\s*Path(?:s)?\\.(?:of|get)\\s*\\(\\s*(\\w+)\\s*,\\s*(\\w+)\\s*\\)\\s*;.*")) {
+                Pattern p = Pattern.compile(".*\\bPath\\s+(\\w+)\\s*=\\s*Path(?:s)?\\.(?:of|get)\\s*\\(\\s*(\\w+)\\s*,\\s*(\\w+)\\s*\\)\\s*;.*");
+                Matcher m = p.matcher(line);
+                if (m.find()) {
+                    String pathVar = m.group(1);
+                    String baseVar = m.group(2);
+                    String pathArg = m.group(3);
+                    String replacement = indent + "Path " + pathVar + " = Path.of(" + baseVar + ".toString(), " + pathArg + ").normalize();\n"
+                            + indent + "if (!" + pathVar + ".startsWith(" + baseVar + ".normalize())) {\n"
+                            + indent + "    throw new SecurityException(\"Path traversal attempt detected\");\n"
+                            + indent + "}";
+                    lines[targetIdx] = replacement;
+                    String result = String.join("\n", lines);
+                    if (isValidJava(result)) return result;
+                }
+            }
+        }
+
+        String snippet = finding.getVulnerableSnippet();
+        if (snippet != null && snippet.startsWith("new File(") && source.contains(snippet)) {
+            String candidate = source.replace(snippet, snippet + ".getCanonicalFile()");
+            if (isValidJava(candidate)) return candidate;
+        }
+
+        return source;
+    }
+
+    // ─── Transformation: Insecure Deserialization -> Safe Filter ─────────────
+
+    private String composeInsecureDeserialization(String source, SecurityFinding finding) {
+        if (finding.getMethodName() != null && !finding.getMethodName().isBlank()) {
+            Pattern oisPattern = Pattern.compile("(\\bObjectInputStream\\s+(\\w+)\\s*=\\s*new\\s+ObjectInputStream\\([^)]+\\);)");
+            Matcher m = oisPattern.matcher(source);
+            if (m.find()) {
+                String match = m.group(1);
+                String oisVar = m.group(2);
+                String patched = source.replace(match, match + "\n        " + oisVar + ".setObjectInputFilter(java.io.ObjectInputFilter.Config.createFilter(\"java.lang.*;java.util.*;!*\"));");
+                if (isValidJava(patched)) return patched;
+            }
+        }
+        return source;
+    }
+
+    // ─── Transformation: Hardcoded Secret -> System.getenv ───────────────────
+
+    private String composeHardcodedSecret(String source, SecurityFinding finding) {
+        String snippet = finding.getVulnerableSnippet();
+        Pattern awsPattern = Pattern.compile("\"(AKIA[0-9A-Z]{16})\"");
+        Matcher m = awsPattern.matcher(snippet != null ? snippet : source);
+        if (m.find()) {
+            String fullQuoted = m.group(0);
+            String patched = source.replace(fullQuoted, "System.getenv(\"AWS_ACCESS_KEY_ID\")");
+            if (isValidJava(patched)) return patched;
+        }
+
+        String[] lines = source.split("\\r?\\n", -1);
+        int targetIdx = finding.getStartLine() - 1;
+        if (targetIdx >= 0 && targetIdx < lines.length) {
+            String line = lines[targetIdx];
+            String patchedLine = line.replaceAll("\"[^\"]+\"", "System.getenv(\"APP_SECRET\")");
+            lines[targetIdx] = patchedLine;
+            String result = String.join("\n", lines);
+            if (isValidJava(result)) return result;
+        }
+
+        return source;
+    }
+
+    // ─── Transformation: Spring CSRF -> Enable or Stateless ──────────────────
+
+    private String composeCsrfDisabled(String source, SecurityFinding finding) {
+        String snippet = finding.getVulnerableSnippet();
+        if (snippet != null && source.contains(snippet)) {
+            String candidate = source.replace(snippet, "// CSRF protection preserved");
+            if (isValidJava(candidate)) return candidate;
+        }
+        return source;
+    }
+
+    // ─── Transformation: Permissive CORS -> Restrict Origins ─────────────────
+
+    private String composePermissiveCors(String source, SecurityFinding finding) {
+        String patched = source
+                .replace("@CrossOrigin(origins = \"*\")", "@CrossOrigin(origins = \"https://trusted.domain.com\")")
+                .replace("@CrossOrigin(\"*\")", "@CrossOrigin(origins = \"https://trusted.domain.com\")")
+                .replace("@CrossOrigin(originPatterns = \"*\")", "@CrossOrigin(origins = \"https://trusted.domain.com\")")
+                .replace(".addAllowedOrigin(\"*\")", ".addAllowedOrigin(\"https://trusted.domain.com\")")
+                .replace(".allowedOrigins(\"*\")", ".allowedOrigins(\"https://trusted.domain.com\")")
+                .replace(".addAllowedOriginPattern(\"*\")", ".addAllowedOrigin(\"https://trusted.domain.com\")");
+
         if (isValidJava(patched)) {
             return patched;
         }

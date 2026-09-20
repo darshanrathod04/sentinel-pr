@@ -41,12 +41,15 @@ public class DataflowTracker {
             "getParameter", "getHeader", "getQueryString", "getInputStream", "getReader", "getPart", "getCookies"
     );
 
-    private static final Set<String> SINK_METHODS = Set.of(
-            "exec", "executeQuery", "executeUpdate", "execute", "prepareStatement"
+    private static final Set<String> SQL_SINK_METHODS = Set.of(
+            "executeQuery", "executeUpdate", "execute", "prepareStatement",
+            "createQuery", "createNativeQuery", "query", "update", "queryForList",
+            "queryForObject", "queryForMap", "queryForRowSet", "prepareCall"
     );
 
     private static final Set<String> SINK_OBJECTS = Set.of(
-            "ProcessBuilder", "FileInputStream", "FileOutputStream", "FileReader", "FileWriter"
+            "ProcessBuilder", "FileInputStream", "FileOutputStream", "FileReader", "FileWriter",
+            "File", "RandomAccessFile"
     );
 
     /**
@@ -202,10 +205,13 @@ public class DataflowTracker {
         for (MethodCallExpr call : calls) {
             String methodName = call.getNameAsString();
             boolean isExec = "exec".equals(methodName) && call.getScope().map(s -> s.toString().contains("Runtime")).orElse(false);
-            boolean isSql = SINK_METHODS.contains(methodName);
+            boolean isSql = SQL_SINK_METHODS.contains(methodName);
+            boolean isPathMethod = ("of".equals(methodName) || "get".equals(methodName))
+                    && call.getScope().map(s -> s.toString().contains("Path")).orElse(false);
 
-            if (isExec || isSql) {
-                TaintSink.SinkType sinkType = isExec ? TaintSink.SinkType.COMMAND_EXECUTION : TaintSink.SinkType.RAW_SQL;
+            if (isExec || isSql || isPathMethod) {
+                TaintSink.SinkType sinkType = isExec ? TaintSink.SinkType.COMMAND_EXECUTION
+                        : (isSql ? TaintSink.SinkType.RAW_SQL : TaintSink.SinkType.FILE_IO);
                 int line = call.getBegin().map(p -> p.line).orElse(0);
 
                 for (Expression arg : call.getArguments()) {
@@ -292,7 +298,14 @@ public class DataflowTracker {
                 || lower.contains("filter")
                 || lower.contains("whitelist")
                 || lower.contains("isvalid")
-                || lower.contains("check");
+                || lower.contains("check")
+                || lower.contains("normalize")
+                || lower.contains("canonical")
+                || lower.contains("torealpath")
+                || lower.contains("startswith")
+                || lower.contains("setparameter")
+                || lower.contains("setstring")
+                || lower.contains("setint");
     }
 
     private boolean isAnySanitized(Set<String> vars, Set<String> sanitizedVars) {

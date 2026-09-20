@@ -93,6 +93,10 @@ public class UnifiedDiffPatch {
         return verified;
     }
 
+    public boolean isAstValid() {
+        return verified;
+    }
+
     public boolean isRegressionVerified() {
         return regressionVerified;
     }

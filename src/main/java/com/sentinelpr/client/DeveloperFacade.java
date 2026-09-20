@@ -19,6 +19,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Developer facade providing automated code generation, AST-verified unified diff patch synthesis,
@@ -58,6 +60,16 @@ public class DeveloperFacade {
             patchedSource = patchVolatileCompound(originalSource, finding);
         } else if (rule == SecurityRule.UNISOLATED_SUBPROCESS) {
             patchedSource = patchSubprocess(originalSource, finding);
+        } else if (rule == SecurityRule.SQL_INJECTION) {
+            patchedSource = patchSqlInjection(originalSource, finding);
+        } else if (rule == SecurityRule.PATH_TRAVERSAL) {
+            patchedSource = patchPathTraversal(originalSource, finding);
+        } else if (rule == SecurityRule.INSECURE_DESERIALIZATION) {
+            patchedSource = patchInsecureDeserialization(originalSource, finding);
+        } else if (rule == SecurityRule.HARDCODED_SECRET) {
+            patchedSource = patchHardcodedSecret(originalSource, finding);
+        } else if (rule == SecurityRule.SPRING_PERMISSIVE_CORS) {
+            patchedSource = patchPermissiveCors(originalSource, finding);
         }
 
         // Verify AST validity of patched source
@@ -211,6 +223,132 @@ public class DeveloperFacade {
 
     private String patchSubprocess(String source, SecurityFinding finding) {
         String patched = source.replace("Runtime.getRuntime().exec(", "new ProcessBuilder(");
+        if (verifyAst(patched)) {
+            return patched;
+        }
+        return source;
+    }
+
+    private String patchSqlInjection(String source, SecurityFinding finding) {
+        Pattern sqlConcatPattern = Pattern.compile("(?i)(\"\\s*SELECT\\s+[^\"\\n]+WHERE\\s+[^\"\\n]+=\\s*['\"]?\\s*\\+\\s*([a-zA-Z0-9_]+)(?:\\s*\\+\\s*['\"][^\"\\n]*['\"])?)");
+        Matcher m = sqlConcatPattern.matcher(source);
+        if (m.find()) {
+            String fullMatch = m.group(1);
+            String prefix = fullMatch.split("=")[0] + "= ?";
+            if (prefix.startsWith("\"")) {
+                prefix = prefix + "\"";
+            } else {
+                prefix = "\"" + prefix + "\"";
+            }
+            String patched = source.replace(fullMatch, prefix);
+            if (verifyAst(patched)) {
+                return patched;
+            }
+        }
+
+        String snippet = finding.getVulnerableSnippet();
+        if (snippet != null && source.contains(snippet)) {
+            String safeSnippet = snippet.replaceAll("['\"]?\\s*\\+\\s*[a-zA-Z0-9_]+\\s*\\+\\s*['\"]?", "?");
+            String candidate = source.replace(snippet, safeSnippet);
+            if (verifyAst(candidate)) return candidate;
+        }
+
+        return source;
+    }
+
+    private String patchPathTraversal(String source, SecurityFinding finding) {
+        String[] lines = source.split("\\r?\\n", -1);
+        int targetIdx = finding.getStartLine() - 1;
+
+        if (targetIdx >= 0 && targetIdx < lines.length) {
+            String line = lines[targetIdx];
+            String indent = extractIndent(line);
+            // Case A: File file = new File(baseDir, filename);
+            if (line.matches(".*\\bFile\\s+(\\w+)\\s*=\\s*new\\s+File\\s*\\(\\s*(\\w+)\\s*,\\s*(\\w+)\\s*\\)\\s*;.*")) {
+                Pattern p = Pattern.compile(".*\\bFile\\s+(\\w+)\\s*=\\s*new\\s+File\\s*\\(\\s*(\\w+)\\s*,\\s*(\\w+)\\s*\\)\\s*;.*");
+                Matcher m = p.matcher(line);
+                if (m.find()) {
+                    String fileVar = m.group(1);
+                    String baseVar = m.group(2);
+                    String fileArg = m.group(3);
+                    String replacement = indent + "File " + fileVar + " = new File(" + baseVar + ", " + fileArg + ").getCanonicalFile();\n"
+                            + indent + "if (!" + fileVar + ".toPath().startsWith(" + baseVar + ".toPath().normalize())) {\n"
+                            + indent + "    throw new SecurityException(\"Path traversal attempt detected\");\n"
+                            + indent + "}";
+                    lines[targetIdx] = replacement;
+                    String result = String.join("\n", lines);
+                    if (verifyAst(result)) return result;
+                }
+            }
+            // Case B: Path target = Path.of(basePath, userPath);
+            if (line.matches(".*\\bPath\\s+(\\w+)\\s*=\\s*Path(?:s)?\\.(?:of|get)\\s*\\(\\s*(\\w+)\\s*,\\s*(\\w+)\\s*\\)\\s*;.*")) {
+                Pattern p = Pattern.compile(".*\\bPath\\s+(\\w+)\\s*=\\s*Path(?:s)?\\.(?:of|get)\\s*\\(\\s*(\\w+)\\s*,\\s*(\\w+)\\s*\\)\\s*;.*");
+                Matcher m = p.matcher(line);
+                if (m.find()) {
+                    String pathVar = m.group(1);
+                    String baseVar = m.group(2);
+                    String pathArg = m.group(3);
+                    String replacement = indent + "Path " + pathVar + " = Path.of(" + baseVar + ".toString(), " + pathArg + ").normalize();\n"
+                            + indent + "if (!" + pathVar + ".startsWith(" + baseVar + ".normalize())) {\n"
+                            + indent + "    throw new SecurityException(\"Path traversal attempt detected\");\n"
+                            + indent + "}";
+                    lines[targetIdx] = replacement;
+                    String result = String.join("\n", lines);
+                    if (verifyAst(result)) return result;
+                }
+            }
+        }
+
+        return source;
+    }
+
+    private String patchInsecureDeserialization(String source, SecurityFinding finding) {
+        if (finding.getMethodName() != null && !finding.getMethodName().isBlank()) {
+            Pattern oisPattern = Pattern.compile("(\\bObjectInputStream\\s+(\\w+)\\s*=\\s*new\\s+ObjectInputStream\\([^)]+\\);)");
+            Matcher m = oisPattern.matcher(source);
+            if (m.find()) {
+                String match = m.group(1);
+                String oisVar = m.group(2);
+                String patched = source.replace(match, match + "\n        " + oisVar + ".setObjectInputFilter(java.io.ObjectInputFilter.Config.createFilter(\"java.lang.*;java.util.*;!*\"));");
+                if (verifyAst(patched)) return patched;
+            }
+        }
+
+        return source;
+    }
+
+    private String patchHardcodedSecret(String source, SecurityFinding finding) {
+        String snippet = finding.getVulnerableSnippet();
+        Pattern awsPattern = Pattern.compile("\"(AKIA[0-9A-Z]{16})\"");
+        Matcher m = awsPattern.matcher(snippet != null ? snippet : source);
+        if (m.find()) {
+            String fullQuoted = m.group(0);
+            String patched = source.replace(fullQuoted, "System.getenv(\"AWS_ACCESS_KEY_ID\")");
+            if (verifyAst(patched)) return patched;
+        }
+
+        String[] lines = source.split("\\r?\\n", -1);
+        int targetIdx = finding.getStartLine() - 1;
+        if (targetIdx >= 0 && targetIdx < lines.length) {
+            String line = lines[targetIdx];
+            String patchedLine = line.replaceAll("\"[^\"]+\"", "System.getenv(\"APP_SECRET\")");
+            lines[targetIdx] = patchedLine;
+            String result = String.join("\n", lines);
+            if (verifyAst(result)) return result;
+        }
+
+        return source;
+    }
+
+    private String patchPermissiveCors(String source, SecurityFinding finding) {
+        String patched = source
+                .replace("@CrossOrigin(origins = \"*\")", "@CrossOrigin(origins = \"https://trusted.domain.com\")")
+                .replace("@CrossOrigin(\"*\")", "@CrossOrigin(origins = \"https://trusted.domain.com\")")
+                .replace("@CrossOrigin(originPatterns = \"*\")", "@CrossOrigin(origins = \"https://trusted.domain.com\")")
+                .replace(".addAllowedOrigin(\"*\")", ".addAllowedOrigin(\"https://trusted.domain.com\")")
+                .replace(".allowedOrigins(\"*\")", ".allowedOrigins(\"https://trusted.domain.com\")")
+                .replace(".addAllowedOriginPattern(\"*\")", ".addAllowedOrigin(\"https://trusted.domain.com\")");
+
         if (verifyAst(patched)) {
             return patched;
         }

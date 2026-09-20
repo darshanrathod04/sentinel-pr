@@ -27,6 +27,42 @@ public enum SecurityRule {
             "Un-isolated Subprocess Call",
             Severity.CRITICAL,
             "CWE-78: ProcessBuilder or Runtime.exec invoked without strict argument isolation, boundary validation, or process termination guarantees."
+    ),
+    SQL_INJECTION(
+            "SEC-005-SQL-INJECTION",
+            "SQL Injection",
+            Severity.CRITICAL,
+            "CWE-89: Un-parameterized raw string concatenation or formatted strings passed into SQL execution sinks."
+    ),
+    PATH_TRAVERSAL(
+            "SEC-006-PATH-TRAVERSAL",
+            "Path Traversal",
+            Severity.CRITICAL,
+            "CWE-22: User input concatenated directly into File/Path operations without normalization or containment validation."
+    ),
+    INSECURE_DESERIALIZATION(
+            "SEC-007-INSECURE-DESERIALIZATION",
+            "Insecure Deserialization",
+            Severity.CRITICAL,
+            "CWE-502: Unvalidated ObjectInputStream.readObject() calls without custom filtering or LookAheadObjectInputStream."
+    ),
+    HARDCODED_SECRET(
+            "SEC-008-HARDCODED-SECRET",
+            "Hardcoded Secret or Token",
+            Severity.HIGH,
+            "CWE-798: High-entropy secret, API key, AWS credential, private key, or password embedded in source code."
+    ),
+    SPRING_SECURITY_CSRF_DISABLED(
+            "SEC-009-SPRING-SECURITY-CSRF-DISABLED",
+            "Spring Security CSRF Disabled",
+            Severity.HIGH,
+            "CWE-352: SecurityFilterChain bean explicitly disables CSRF protection without configuring stateless session management."
+    ),
+    SPRING_PERMISSIVE_CORS(
+            "SEC-010-SPRING-PERMISSIVE-CORS",
+            "Spring Permissive CORS Policy",
+            Severity.MEDIUM,
+            "CWE-942: Permissive CORS policy with wildcard origin '*' allows unauthorized cross-origin requests."
     );
 
     private final String ruleId;

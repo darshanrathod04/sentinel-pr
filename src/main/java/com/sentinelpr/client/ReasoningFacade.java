@@ -3,18 +3,23 @@ package com.sentinelpr.client;
 import com.github.javaparser.ast.Node;
 import com.github.javaparser.ast.body.FieldDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
+import com.github.javaparser.ast.body.Parameter;
 import com.github.javaparser.ast.body.VariableDeclarator;
 import com.github.javaparser.ast.expr.AssignExpr;
+import com.github.javaparser.ast.expr.BinaryExpr;
 import com.github.javaparser.ast.expr.Expression;
 import com.github.javaparser.ast.expr.MethodCallExpr;
 import com.github.javaparser.ast.expr.NameExpr;
 import com.github.javaparser.ast.expr.ObjectCreationExpr;
+import com.github.javaparser.ast.expr.StringLiteralExpr;
 import com.github.javaparser.ast.expr.UnaryExpr;
 import com.github.javaparser.ast.stmt.CatchClause;
 import com.github.javaparser.ast.stmt.ReturnStmt;
 import com.github.javaparser.ast.stmt.Statement;
 import com.github.javaparser.ast.stmt.TryStmt;
 import com.sentinelpr.core.analysis.DataflowTracker;
+import com.sentinelpr.core.analysis.FrameworkContextAnalyzer;
+import com.sentinelpr.core.analysis.SecretScanningEngine;
 import com.sentinelpr.core.analysis.taint.TaintFlow;
 import com.sentinelpr.core.model.InspectedSource;
 import com.sentinelpr.core.model.SecurityFinding;
@@ -40,6 +45,8 @@ public class ReasoningFacade {
     private final ShreeAI shreeAi;
     private final DefaultCausalReasoningEngine causalEngine;
     private final DataflowTracker dataflowTracker;
+    private final SecretScanningEngine secretScanningEngine;
+    private final FrameworkContextAnalyzer frameworkAnalyzer;
 
     private static final Set<String> STREAM_TYPES = Set.of(
             "FileInputStream", "FileOutputStream", "InputStream", "OutputStream",
@@ -52,13 +59,24 @@ public class ReasoningFacade {
     );
 
     public ReasoningFacade(ShreeAI shreeAi) {
-        this(shreeAi, new DataflowTracker());
+        this(shreeAi, new DataflowTracker(), new SecretScanningEngine(), new FrameworkContextAnalyzer());
     }
 
     public ReasoningFacade(ShreeAI shreeAi, DataflowTracker dataflowTracker) {
+        this(shreeAi, dataflowTracker, new SecretScanningEngine(), new FrameworkContextAnalyzer());
+    }
+
+    public ReasoningFacade(
+            ShreeAI shreeAi,
+            DataflowTracker dataflowTracker,
+            SecretScanningEngine secretScanningEngine,
+            FrameworkContextAnalyzer frameworkAnalyzer
+    ) {
         this.shreeAi = Objects.requireNonNull(shreeAi, "shreeAi must not be null");
         this.causalEngine = new DefaultCausalReasoningEngine();
         this.dataflowTracker = Objects.requireNonNull(dataflowTracker, "dataflowTracker must not be null");
+        this.secretScanningEngine = Objects.requireNonNull(secretScanningEngine, "secretScanningEngine must not be null");
+        this.frameworkAnalyzer = Objects.requireNonNull(frameworkAnalyzer, "frameworkAnalyzer must not be null");
     }
 
     /**
@@ -70,6 +88,12 @@ public class ReasoningFacade {
         findings.addAll(evaluateUnclosedIoStreams(source));
         findings.addAll(evaluateVolatileCompoundOps(source));
         findings.addAll(evaluateSubprocessCalls(source));
+        findings.addAll(evaluateSqlInjection(source));
+        findings.addAll(evaluatePathTraversal(source));
+        findings.addAll(evaluateInsecureDeserialization(source));
+        findings.addAll(evaluateHardcodedSecrets(source));
+        findings.addAll(evaluateSpringCsrfDisabled(source));
+        findings.addAll(evaluateSpringPermissiveCors(source));
         return findings;
     }
 
@@ -359,11 +383,358 @@ public class ReasoningFacade {
         return body.contains("return true") || body.contains("grantAccess") || body.contains("authorized = true");
     }
 
+    // ─── Rule 5: SQL Injection (A03:2021-Injection) ─────────────────────────
+
+    private static final Set<String> SQL_SINK_METHOD_NAMES = Set.of(
+            "executeQuery", "executeUpdate", "execute", "prepareStatement", "prepareCall",
+            "createQuery", "createNativeQuery", "query", "update", "queryForList",
+            "queryForObject", "queryForMap", "queryForRowSet"
+    );
+
+    public List<SecurityFinding> evaluateSqlInjection(InspectedSource source) {
+        List<SecurityFinding> findings = new ArrayList<>();
+        String pathStr = source.getFilePath() != null ? source.getFilePath().toString() : "UnknownSource.java";
+
+        for (MethodCallExpr call : source.getMethodCalls()) {
+            String methodName = call.getNameAsString();
+            if (!SQL_SINK_METHOD_NAMES.contains(methodName)) {
+                continue;
+            }
+
+            if (call.getArguments().isEmpty()) {
+                continue;
+            }
+
+            Expression sqlArg = call.getArgument(0);
+            boolean isVulnerable = isConcatenatedOrFormatted(sqlArg, source);
+
+            MethodDeclaration enclosingMethod = call.findAncestor(MethodDeclaration.class).orElse(null);
+            String enclosingMethodName = enclosingMethod != null ? enclosingMethod.getNameAsString() : "unknownMethod";
+
+            Optional<TaintFlow> matchingFlow = Optional.empty();
+            if (enclosingMethod != null) {
+                int callLine = call.getBegin().map(p -> p.line).orElse(0);
+                List<TaintFlow> flows = dataflowTracker.analyzeMethod(enclosingMethod, pathStr);
+                matchingFlow = flows.stream()
+                        .filter(f -> f.getSink().getLine() == callLine && !f.isSanitized())
+                        .findFirst();
+                if (matchingFlow.isPresent()) {
+                    isVulnerable = true;
+                }
+            }
+
+            if (isVulnerable) {
+                int startLine = call.getBegin().map(p -> p.line).orElse(0);
+                int endLine = call.getEnd().map(p -> p.line).orElse(0);
+
+                String rationale = "Dynamic SQL query constructed via un-parameterized concatenation or string formatting passed into SQL execution sink. Allows SQL injection (CWE-89 / OWASP A03:2021) enabling unauthorized data exfiltration, authentication bypass, or data tampering.";
+                double confidence = 0.96;
+
+                if (matchingFlow.isPresent()) {
+                    rationale = "Taint trace: " + matchingFlow.get().formatTrace() + ". " + rationale;
+                    confidence = 0.99;
+                }
+
+                String remediation = "Use parameterized queries with PreparedStatement placeholders ('?') or ORM bind parameters (e.g. :param) instead of raw string concatenation.";
+
+                findings.add(new SecurityFinding(
+                        "FND-" + UUID.randomUUID().toString().substring(0, 8),
+                        SecurityRule.SQL_INJECTION,
+                        Severity.CRITICAL,
+                        pathStr,
+                        source.getPrimaryClassName(),
+                        enclosingMethodName,
+                        startLine,
+                        endLine,
+                        call.toString(),
+                        "SQL Injection vulnerability in " + methodName + "() call",
+                        rationale,
+                        remediation,
+                        confidence
+                ));
+            }
+        }
+
+        return findings;
+    }
+
+    // ─── Rule 6: Path Traversal (A01:2021-Broken Access Control) ─────────────
+
+    private static final Set<String> PATH_CONSTRUCTORS = Set.of(
+            "File", "FileInputStream", "FileOutputStream", "FileReader", "FileWriter"
+    );
+
+    public List<SecurityFinding> evaluatePathTraversal(InspectedSource source) {
+        List<SecurityFinding> findings = new ArrayList<>();
+        String pathStr = source.getFilePath() != null ? source.getFilePath().toString() : "UnknownSource.java";
+
+        // A. Object creations: new File(...), new FileInputStream(...), etc.
+        for (ObjectCreationExpr creation : source.getObjectCreations()) {
+            String typeName = creation.getTypeAsString();
+            if (!PATH_CONSTRUCTORS.contains(typeName) || creation.getArguments().isEmpty()) {
+                continue;
+            }
+
+            MethodDeclaration enclosingMethod = creation.findAncestor(MethodDeclaration.class).orElse(null);
+            if (enclosingMethod == null || hasPathGuards(enclosingMethod)) {
+                continue;
+            }
+
+            int line = creation.getBegin().map(p -> p.line).orElse(0);
+            int endLine = creation.getEnd().map(p -> p.line).orElse(line);
+            String methodName = enclosingMethod.getNameAsString();
+
+            boolean hasDynamicArg = creation.getArguments().stream().anyMatch(arg -> !(arg instanceof StringLiteralExpr));
+            boolean hasStringPath = hasStringPathArgument(creation.getArguments(), enclosingMethod);
+            if (!hasDynamicArg || !hasStringPath) {
+                continue;
+            }
+
+            List<TaintFlow> flows = dataflowTracker.analyzeMethod(enclosingMethod, pathStr);
+            Optional<TaintFlow> matching = flows.stream()
+                    .filter(f -> f.getSink().getLine() == line && !f.isSanitized())
+                    .findFirst();
+
+            String rationale = "User-controlled input flows directly into file/path constructor without path normalization (.normalize() / getCanonicalFile()) or directory containment checks. Enables Path Traversal (CWE-22 / OWASP A01:2021) allowing unauthorized filesystem access.";
+            double confidence = 0.95;
+            if (matching.isPresent()) {
+                rationale = "Taint trace: " + matching.get().formatTrace() + ". " + rationale;
+                confidence = 0.99;
+            }
+
+            findings.add(new SecurityFinding(
+                    "FND-" + UUID.randomUUID().toString().substring(0, 8),
+                    SecurityRule.PATH_TRAVERSAL,
+                    Severity.CRITICAL,
+                    pathStr,
+                    source.getPrimaryClassName(),
+                    methodName,
+                    line,
+                    endLine,
+                    creation.toString(),
+                    "Path Traversal vulnerability in " + typeName + " instantiation",
+                    rationale,
+                    "Canonicalize and normalize the path (.normalize() / getCanonicalFile()) and verify that the target path starts with the designated base directory.",
+                    confidence
+            ));
+        }
+
+        // B. Method calls: Path.of(...), Paths.get(...)
+        for (MethodCallExpr call : source.getMethodCalls()) {
+            String name = call.getNameAsString();
+            if (("of".equals(name) || "get".equals(name)) && call.getScope().map(s -> s.toString().contains("Path")).orElse(false)) {
+                MethodDeclaration enclosingMethod = call.findAncestor(MethodDeclaration.class).orElse(null);
+                if (enclosingMethod == null || hasPathGuards(enclosingMethod)) {
+                    continue;
+                }
+
+                boolean hasDynamicArg = call.getArguments().stream().anyMatch(arg -> !(arg instanceof StringLiteralExpr));
+                boolean hasStringPath = hasStringPathArgument(call.getArguments(), enclosingMethod);
+                if (!hasDynamicArg || !hasStringPath) {
+                    continue;
+                }
+
+                int line = call.getBegin().map(p -> p.line).orElse(0);
+                int endLine = call.getEnd().map(p -> p.line).orElse(line);
+                String methodName = enclosingMethod.getNameAsString();
+
+                List<TaintFlow> flows = dataflowTracker.analyzeMethod(enclosingMethod, pathStr);
+                Optional<TaintFlow> matching = flows.stream()
+                        .filter(f -> f.getSink().getLine() == line && !f.isSanitized())
+                        .findFirst();
+
+                String rationale = "User-controlled path input passed to Path." + name + "() without normalization (.normalize()) or directory containment validation (startsWith(baseDir)). Enables Path Traversal (CWE-22 / OWASP A01:2021).";
+                double confidence = 0.95;
+                if (matching.isPresent()) {
+                    rationale = "Taint trace: " + matching.get().formatTrace() + ". " + rationale;
+                    confidence = 0.99;
+                }
+
+                findings.add(new SecurityFinding(
+                        "FND-" + UUID.randomUUID().toString().substring(0, 8),
+                        SecurityRule.PATH_TRAVERSAL,
+                        Severity.CRITICAL,
+                        pathStr,
+                        source.getPrimaryClassName(),
+                        methodName,
+                        line,
+                        endLine,
+                        call.toString(),
+                        "Path Traversal vulnerability in Path." + name + "() call",
+                        rationale,
+                        "Normalize path via .normalize() and verify that the path starts with the trusted base directory.",
+                        confidence
+                ));
+            }
+        }
+
+        return findings;
+    }
+
+    // ─── Rule 7: Insecure Deserialization (A08:2021) ─────────────────────────
+
+    public List<SecurityFinding> evaluateInsecureDeserialization(InspectedSource source) {
+        List<SecurityFinding> findings = new ArrayList<>();
+        String pathStr = source.getFilePath() != null ? source.getFilePath().toString() : "UnknownSource.java";
+
+        for (MethodCallExpr call : source.getMethodCalls()) {
+            String name = call.getNameAsString();
+            if ("readObject".equals(name) || "readUnshared".equals(name)) {
+                MethodDeclaration method = call.findAncestor(MethodDeclaration.class).orElse(null);
+                String methodName = method != null ? method.getNameAsString() : "unknownMethod";
+
+                if (!hasDeserializationFilter(method, source)) {
+                    int line = call.getBegin().map(p -> p.line).orElse(0);
+                    int endLine = call.getEnd().map(p -> p.line).orElse(line);
+
+                    findings.add(new SecurityFinding(
+                            "FND-" + UUID.randomUUID().toString().substring(0, 8),
+                            SecurityRule.INSECURE_DESERIALIZATION,
+                            Severity.CRITICAL,
+                            pathStr,
+                            source.getPrimaryClassName(),
+                            methodName,
+                            line,
+                            endLine,
+                            call.toString(),
+                            "Insecure Java deserialization: " + call.toString(),
+                            "Invocation of ObjectInputStream.readObject() without an active ObjectInputFilter or LookAheadObjectInputStream. Untrusted Java deserialization can lead to arbitrary remote code execution (RCE) via gadget chains (CWE-502 / OWASP A08:2021).",
+                            "Configure a strict ObjectInputFilter using stream.setObjectInputFilter(...) or migrate from Java native serialization to safe serialization formats like JSON (Jackson) or Protocol Buffers.",
+                            0.98
+                    ));
+                }
+            }
+        }
+
+        return findings;
+    }
+
+    // ─── Rule 8: Hardcoded Secrets (CWE-798) ─────────────────────────────────
+
+    public List<SecurityFinding> evaluateHardcodedSecrets(InspectedSource source) {
+        return secretScanningEngine.scan(source);
+    }
+
+    // ─── Rule 9: Spring CSRF Disabled (CWE-352) ──────────────────────────────
+
+    public List<SecurityFinding> evaluateSpringCsrfDisabled(InspectedSource source) {
+        return frameworkAnalyzer.evaluateCsrfDisabled(source);
+    }
+
+    // ─── Rule 10: Spring Permissive CORS (CWE-942) ───────────────────────────
+
+    public List<SecurityFinding> evaluateSpringPermissiveCors(InspectedSource source) {
+        return frameworkAnalyzer.evaluatePermissiveCors(source);
+    }
+
+    // ─── Helpers ─────────────────────────────────────────────────────────────
+
+    private boolean isConcatenatedOrFormatted(Expression expr, InspectedSource source) {
+        if (expr instanceof BinaryExpr binary && binary.getOperator() == BinaryExpr.Operator.PLUS) {
+            return hasNonLiteralString(binary);
+        }
+        if (expr instanceof MethodCallExpr call) {
+            String name = call.getNameAsString();
+            if ("format".equals(name) || "formatted".equals(name)) {
+                return true;
+            }
+        }
+        if (expr instanceof NameExpr nameExpr) {
+            String varName = nameExpr.getNameAsString();
+            for (VariableDeclarator varDecl : source.getVariableDeclarations()) {
+                if (varDecl.getNameAsString().equals(varName) && varDecl.getInitializer().isPresent()) {
+                    if (isConcatenatedOrFormatted(varDecl.getInitializer().get(), source)) {
+                        return true;
+                    }
+                }
+            }
+            for (AssignExpr assign : source.getAssignExpressions()) {
+                if (assign.getTarget() instanceof NameExpr target && target.getNameAsString().equals(varName)) {
+                    if (isConcatenatedOrFormatted(assign.getValue(), source)) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    private boolean hasNonLiteralString(BinaryExpr binary) {
+        Expression left = binary.getLeft();
+        Expression right = binary.getRight();
+        if (left instanceof BinaryExpr subBinary && hasNonLiteralString(subBinary)) {
+            return true;
+        }
+        if (right instanceof BinaryExpr subBinary && hasNonLiteralString(subBinary)) {
+            return true;
+        }
+        return !(left instanceof StringLiteralExpr) || !(right instanceof StringLiteralExpr);
+    }
+
+    private boolean hasPathGuards(MethodDeclaration method) {
+        if (method == null || method.getBody().isEmpty()) {
+            return false;
+        }
+        String body = method.getBody().get().toString();
+        return body.contains(".normalize()")
+                || body.contains("getCanonicalPath()")
+                || body.contains("getCanonicalFile()")
+                || body.contains("toRealPath()")
+                || (body.contains(".startsWith(") && (body.contains("base") || body.contains("root") || body.contains("Dir") || body.contains("Path")));
+    }
+
+    private boolean hasDeserializationFilter(MethodDeclaration method, InspectedSource source) {
+        if (method != null && method.getBody().isPresent()) {
+            String body = method.getBody().get().toString();
+            if (body.contains("setObjectInputFilter") || body.contains("ObjectInputFilter")
+                    || body.contains("LookAheadObjectInputStream") || body.contains("ValidatingObjectInputStream")) {
+                return true;
+            }
+        }
+        for (String imp : source.getImports()) {
+            if (imp.contains("LookAheadObjectInputStream") || imp.contains("ValidatingObjectInputStream") || imp.contains("ObjectInputFilter")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean hasStringPathArgument(List<Expression> args, MethodDeclaration method) {
+        if (args == null || method == null) {
+            return false;
+        }
+        for (Expression arg : args) {
+            if (arg instanceof BinaryExpr binary && binary.getOperator() == BinaryExpr.Operator.PLUS) {
+                return true;
+            }
+            if (arg instanceof NameExpr nameExpr) {
+                String varName = nameExpr.getNameAsString();
+                for (Parameter param : method.getParameters()) {
+                    if (param.getNameAsString().equals(varName)) {
+                        String type = param.getTypeAsString();
+                        if ("String".equals(type) || "CharSequence".equals(type)) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
     public DefaultCausalReasoningEngine getCausalEngine() {
         return causalEngine;
     }
 
     public DataflowTracker getDataflowTracker() {
         return dataflowTracker;
+    }
+
+    public SecretScanningEngine getSecretScanningEngine() {
+        return secretScanningEngine;
+    }
+
+    public FrameworkContextAnalyzer getFrameworkAnalyzer() {
+        return frameworkAnalyzer;
     }
 }

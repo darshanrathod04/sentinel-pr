@@ -5,9 +5,11 @@ import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
 import com.github.javaparser.ast.body.FieldDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
 import com.github.javaparser.ast.body.VariableDeclarator;
+import com.github.javaparser.ast.expr.AnnotationExpr;
 import com.github.javaparser.ast.expr.AssignExpr;
 import com.github.javaparser.ast.expr.MethodCallExpr;
 import com.github.javaparser.ast.expr.ObjectCreationExpr;
+import com.github.javaparser.ast.expr.StringLiteralExpr;
 import com.github.javaparser.ast.expr.UnaryExpr;
 import com.github.javaparser.ast.stmt.CatchClause;
 import com.github.javaparser.ast.stmt.TryStmt;
@@ -136,5 +138,19 @@ public class InspectedSource {
 
     public List<MethodCallExpr> getMethodCalls() {
         return methodCalls;
+    }
+
+    public List<StringLiteralExpr> getStringLiterals() {
+        if (compilationUnit != null) {
+            return compilationUnit.findAll(StringLiteralExpr.class);
+        }
+        return Collections.emptyList();
+    }
+
+    public List<AnnotationExpr> getAnnotations() {
+        if (compilationUnit != null) {
+            return compilationUnit.findAll(AnnotationExpr.class);
+        }
+        return Collections.emptyList();
     }
 }

@@ -3,6 +3,8 @@ package com.sentinelpr;
 import com.sentinelpr.cli.SentinelCliRunner;
 import com.sentinelpr.client.SentinelClient;
 import com.sentinelpr.core.analysis.DataflowTracker;
+import com.sentinelpr.core.analysis.FrameworkContextAnalyzer;
+import com.sentinelpr.core.analysis.SecretScanningEngine;
 import com.sentinelpr.core.analysis.SuppressionManager;
 import com.sentinelpr.core.service.AutomatedPatchService;
 import com.sentinelpr.core.service.CodeInspectionService;
@@ -48,6 +50,16 @@ public class SentinelPrApplication {
     @Bean
     public DataflowTracker dataflowTracker() {
         return new DataflowTracker();
+    }
+
+    @Bean
+    public SecretScanningEngine secretScanningEngine() {
+        return new SecretScanningEngine();
+    }
+
+    @Bean
+    public FrameworkContextAnalyzer frameworkContextAnalyzer() {
+        return new FrameworkContextAnalyzer();
     }
 
     @Bean

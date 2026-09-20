@@ -54,6 +54,12 @@ public class RuleEvaluationService {
             case UNCLOSED_IO_STREAM -> client.reasoning().evaluateUnclosedIoStreams(inspectedSource);
             case VOLATILE_COMPOUND_OP -> client.reasoning().evaluateVolatileCompoundOps(inspectedSource);
             case UNISOLATED_SUBPROCESS -> client.reasoning().evaluateSubprocessCalls(inspectedSource);
+            case SQL_INJECTION -> client.reasoning().evaluateSqlInjection(inspectedSource);
+            case PATH_TRAVERSAL -> client.reasoning().evaluatePathTraversal(inspectedSource);
+            case INSECURE_DESERIALIZATION -> client.reasoning().evaluateInsecureDeserialization(inspectedSource);
+            case HARDCODED_SECRET -> client.reasoning().evaluateHardcodedSecrets(inspectedSource);
+            case SPRING_SECURITY_CSRF_DISABLED -> client.reasoning().evaluateSpringCsrfDisabled(inspectedSource);
+            case SPRING_PERMISSIVE_CORS -> client.reasoning().evaluateSpringPermissiveCors(inspectedSource);
         };
     }
 

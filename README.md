@@ -208,6 +208,12 @@ curl -X POST http://localhost:8080/api/v1/sentinel/review \
 | **`SEC-002-UNCLOSED-STREAM`** | `HIGH` | [CWE-404](https://cwe.mitre.org/data/definitions/404.html) | File/Network stream (`FileInputStream`, etc.) instantiated without try-with-resources or deterministic closure, causing file descriptor leaks. |
 | **`SEC-003-VOLATILE-COMPOUND`** | `HIGH` | [CWE-362](https://cwe.mitre.org/data/definitions/362.html) | Non-atomic compound mutation (`counter++`, `counter--`, `counter += 1`) on `volatile` variable, leading to lost updates under concurrency. |
 | **`SEC-004-UNISOLATED-SUBPROCESS`** | `CRITICAL` | [CWE-78](https://cwe.mitre.org/data/definitions/78.html) | Un-isolated `Runtime.getRuntime().exec` without argument tokenization or execution constraints, exposing command injection risks. |
+| **`SEC-005-SQL-INJECTION`** | `CRITICAL` | [CWE-89](https://cwe.mitre.org/data/definitions/89.html) | Un-parameterized raw string concatenation or formatted strings passed into SQL execution sinks (Statement, EntityManager, JdbcTemplate). |
+| **`SEC-006-PATH-TRAVERSAL`** | `CRITICAL` | [CWE-22](https://cwe.mitre.org/data/definitions/22.html) | User input concatenated directly into File/Path instantiation without canonicalization, normalization (.normalize()), or containment validation. |
+| **`SEC-007-INSECURE-DESERIALIZATION`** | `CRITICAL` | [CWE-502](https://cwe.mitre.org/data/definitions/502.html) | Unvalidated `ObjectInputStream.readObject()` calls without custom filtering, LookAheadObjectInputStream, or ObjectInputFilter. |
+| **`SEC-008-HARDCODED-SECRET`** | `HIGH` | [CWE-798](https://cwe.mitre.org/data/definitions/798.html) | High-entropy secrets (Shannon entropy > 3.2), AWS access keys, private keys, or passwords embedded directly in source code. |
+| **`SEC-009-SPRING-SECURITY-CSRF-DISABLED`** | `HIGH` | [CWE-352](https://cwe.mitre.org/data/definitions/352.html) | SecurityFilterChain explicitly disables CSRF without configuring stateless session management (SessionCreationPolicy.STATELESS). |
+| **`SEC-010-SPRING-PERMISSIVE-CORS`** | `MEDIUM` | [CWE-942](https://cwe.mitre.org/data/definitions/942.html) | Permissive `@CrossOrigin(origins = "*")` or CorsConfiguration allowing arbitrary origins to access sensitive resources. |
 
 *For complete details, patch examples, and remediation rationale, see the [SentinelPR Usage Guide](USAGE_GUIDE.md).*
 
