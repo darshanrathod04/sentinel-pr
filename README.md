@@ -97,6 +97,10 @@ SentinelPR leverages the 10-SDK cognitive kernel surface provided by **Shree AI 
 - **Incremental PR Diff Range Filtering (`IncrementalDiffScanner`)**: Parses unified diff hunk intervals (`@@ -l,s +l,s @@`) to restrict PR blockages strictly to lines added or modified in the pull request, classifying legacy defects outside the diff hunks as baseline (`DIFF_BASELINE`).
 - **OASIS SARIF v2.1.0 Report Exporter (`SarifReportGenerator`)**: Produces schema-compliant SARIF 2.1.0 JSON documents (`https://json.schemastore.org/sarif-2.1.0.json`) with comprehensive rules catalog (`SEC-001` through `SEC-010`), line regions, and verified patch properties for GitHub Code Scanning and GitLab SAST.
 - **Structured GitHub PR Review Synthesis (`PrReviewCommentBuilder`)**: Synthesizes GitHub Pull Request Review API payloads with inline comment alerts (`> [!CAUTION]`, `> [!WARNING]`), collapsible ````suggestion```` unified diff blocks, and an executive markdown summary table.
+- **Deep Root-Cause Causal Reasoning (`CausalAnalysisEngine` & `CausalChain`)**: Synthesizes multi-hop causal chains (`Trigger -> Propagation -> Exploit Scenario -> Business Impact`), estimates blast radius (`LOCAL_METHOD`, `SERVICE_COMPONENT`, `TENANT_DATA`, `SYSTEM_WIDE`), and verifies caller reachability via public controllers.
+- **Calibrated Confidence & Exploitability Scoring (`ConfidenceCalibrator` & `ExploitabilityIndex`)**: Deterministic 4-factor scoring model ($0.35$ taint continuity, $0.30$ AST precision, $0.20$ absence of sanitizers, $0.15$ reachability) assigning exploitability indices (`VERY_LOW` through `CRITICAL`) and auto-suppressing unverified heuristics ($< 0.70$).
+- **Multi-File Coordinated Fix Planner (`MultiFileFixPlanner` & `CoordinatedPatchPlan`)**: Cross-boundary refactoring across coupled providers and consumers (e.g. `CoupledService` $\to$ `CoupledController`), wrapping Shree AI OS `PatchPlan` with simultaneous multi-file AST validation.
+- **Architectural Hygiene & Anti-Pattern Review (`ArchitectureReviewEngine`)**: Evaluates architectural design flaws including cyclic dependencies (`ARCH-001`), leaky entity abstractions in REST endpoints (`ARCH-002`), and non-deterministic clock/random invocations in business services (`ARCH-003`).
 - **Atomic Patch Composition (`PatchComposer`)**: Sequentially applies all verified AST transformations in-memory to generate ONE non-conflicting unified diff per file.
 - **Post-Patch Regression Verification (`PatchVerifier`)**: Re-parses patched code with `JavaAstParser` and re-evaluates all security rules to guarantee 0 critical vulnerabilities remain, setting `regressionVerified: true`.
 - **Baseline Technical Debt Engine (`BaselineManager`)**: Captures repository debt snapshots into `.sentinelbaseline.json`, fingerprinting findings by SHA-256 or structural proximity to suppress legacy defects as `BASELINE_ACCEPTED` while blocking net-new defects.
@@ -145,7 +149,9 @@ Expected output:
 [INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0
 [INFO] Running com.sentinelpr.SentinelPrP3GovernanceVerificationTest
 [INFO] Tests run: 6, Failures: 0, Errors: 0, Skipped: 0
-[INFO] BUILD SUCCESS (23 tests passed, 0 failures)
+[INFO] Running com.sentinelpr.SentinelPrP4IntelligenceVerificationTest
+[INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0
+[INFO] BUILD SUCCESS (28 tests passed, 0 failures)
 ```
 
 ### 2. Execute CLI Audit
@@ -270,6 +276,9 @@ curl -X GET http://localhost:8080/api/v1/sentinel/governance/status
 | **`SEC-008-HARDCODED-SECRET`** | `HIGH` | [CWE-798](https://cwe.mitre.org/data/definitions/798.html) | High-entropy secrets (Shannon entropy > 3.2), AWS access keys, private keys, or passwords embedded directly in source code. |
 | **`SEC-009-SPRING-SECURITY-CSRF-DISABLED`** | `HIGH` | [CWE-352](https://cwe.mitre.org/data/definitions/352.html) | SecurityFilterChain explicitly disables CSRF without configuring stateless session management (SessionCreationPolicy.STATELESS). |
 | **`SEC-010-SPRING-PERMISSIVE-CORS`** | `MEDIUM` | [CWE-942](https://cwe.mitre.org/data/definitions/942.html) | Permissive `@CrossOrigin(origins = "*")` or CorsConfiguration allowing arbitrary origins to access sensitive resources. |
+| **`ARCH-001-CYCLIC-DEPENDENCY`** | `HIGH` | [CWE-1047](https://cwe.mitre.org/data/definitions/1047.html) | Circular dependency cycle detected across components/packages, violating single responsibility and testability. |
+| **`ARCH-002-LEAKY-ABSTRACTION`** | `HIGH` | [CWE-1061](https://cwe.mitre.org/data/definitions/1061.html) | Internal database/JPA entities leaked directly across REST API controller boundaries instead of dedicated DTOs. |
+| **`ARCH-003-NON-DETERMINISTIC-CALL`** | `MEDIUM` | [CWE-676](https://cwe.mitre.org/data/definitions/676.html) | Direct System.currentTimeMillis() or Random instantiations in service layer impairing auditability and determinism. |
 
 *For complete details, patch examples, and remediation rationale, see the [SentinelPR Usage Guide](USAGE_GUIDE.md).*
 

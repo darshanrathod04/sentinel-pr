@@ -119,6 +119,9 @@ public class PatchComposer {
             case HARDCODED_SECRET -> 8;
             case SPRING_SECURITY_CSRF_DISABLED -> 9;
             case SPRING_PERMISSIVE_CORS -> 10;
+            case ARCH_CYCLIC_DEPENDENCY -> 11;
+            case ARCH_LEAKY_ABSTRACTION -> 12;
+            case ARCH_NON_DETERMINISTIC_CALL -> 13;
         };
     }
 
@@ -135,6 +138,7 @@ public class PatchComposer {
             case HARDCODED_SECRET -> composeHardcodedSecret(source, finding);
             case SPRING_SECURITY_CSRF_DISABLED -> composeCsrfDisabled(source, finding);
             case SPRING_PERMISSIVE_CORS -> composePermissiveCors(source, finding);
+            case ARCH_CYCLIC_DEPENDENCY, ARCH_LEAKY_ABSTRACTION, ARCH_NON_DETERMINISTIC_CALL -> source;
         };
     }
 

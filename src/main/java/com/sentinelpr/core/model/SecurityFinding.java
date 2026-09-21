@@ -23,6 +23,8 @@ public class SecurityFinding {
     private final String causalRationale;
     private final String remediation;
     private final double confidence;
+    private final com.sentinelpr.core.analysis.causal.CausalChain causalChain;
+    private final ExploitabilityIndex exploitabilityIndex;
 
     public SecurityFinding(
             String id,
@@ -39,6 +41,26 @@ public class SecurityFinding {
             String remediation,
             double confidence
     ) {
+        this(id, rule, severity, targetFile, className, methodName, startLine, endLine, vulnerableSnippet, description, causalRationale, remediation, confidence, null, null);
+    }
+
+    public SecurityFinding(
+            String id,
+            SecurityRule rule,
+            Severity severity,
+            String targetFile,
+            String className,
+            String methodName,
+            int startLine,
+            int endLine,
+            String vulnerableSnippet,
+            String description,
+            String causalRationale,
+            String remediation,
+            double confidence,
+            com.sentinelpr.core.analysis.causal.CausalChain causalChain,
+            ExploitabilityIndex exploitabilityIndex
+    ) {
         this.id = Objects.requireNonNull(id, "id must not be null");
         this.rule = Objects.requireNonNull(rule, "rule must not be null");
         this.severity = severity != null ? severity : rule.getSeverity();
@@ -52,6 +74,8 @@ public class SecurityFinding {
         this.causalRationale = causalRationale != null ? causalRationale : "";
         this.remediation = remediation != null ? remediation : "";
         this.confidence = confidence;
+        this.causalChain = causalChain;
+        this.exploitabilityIndex = exploitabilityIndex;
     }
 
     public String getId() {
@@ -106,6 +130,38 @@ public class SecurityFinding {
         return confidence;
     }
 
+    public com.sentinelpr.core.analysis.causal.CausalChain getCausalChain() {
+        return causalChain;
+    }
+
+    public ExploitabilityIndex getExploitabilityIndex() {
+        return exploitabilityIndex;
+    }
+
+    public SecurityFinding withCausalChain(com.sentinelpr.core.analysis.causal.CausalChain chain) {
+        return new SecurityFinding(
+                this.id, this.rule, this.severity, this.targetFile, this.className, this.methodName,
+                this.startLine, this.endLine, this.vulnerableSnippet, this.description,
+                this.causalRationale, this.remediation, this.confidence, chain, this.exploitabilityIndex
+        );
+    }
+
+    public SecurityFinding withCalibratedConfidence(double calibratedConfidence, ExploitabilityIndex index) {
+        return new SecurityFinding(
+                this.id, this.rule, this.severity, this.targetFile, this.className, this.methodName,
+                this.startLine, this.endLine, this.vulnerableSnippet, this.description,
+                this.causalRationale, this.remediation, calibratedConfidence, this.causalChain, index
+        );
+    }
+
+    public SecurityFinding withExploitabilityIndex(ExploitabilityIndex index) {
+        return new SecurityFinding(
+                this.id, this.rule, this.severity, this.targetFile, this.className, this.methodName,
+                this.startLine, this.endLine, this.vulnerableSnippet, this.description,
+                this.causalRationale, this.remediation, this.confidence, this.causalChain, index
+        );
+    }
+
     @Override
     public String toString() {
         return "SecurityFinding{" +
@@ -115,6 +171,8 @@ public class SecurityFinding {
                 ", targetFile='" + targetFile + '\'' +
                 ", line=" + startLine + "-" + endLine +
                 ", description='" + description + '\'' +
+                ", confidence=" + confidence +
+                (exploitabilityIndex != null ? ", exploitability=" + exploitabilityIndex : "") +
                 '}';
     }
 }

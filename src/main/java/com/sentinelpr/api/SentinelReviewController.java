@@ -74,7 +74,9 @@ public class SentinelReviewController {
                 "service", "SentinelPR - Enterprise Code & Security Review Copilot",
                 "status", "UP",
                 "platform", "Shree AI OS (1.0.6-developer-preview)",
-                "rules", SecurityRule.values().length
+                "rules", SecurityRule.getCoreSecurityRulesCount(),
+                "architecturalRules", SecurityRule.values().length - SecurityRule.getCoreSecurityRulesCount(),
+                "totalRules", SecurityRule.values().length
         ));
     }
 
@@ -188,7 +190,9 @@ public class SentinelReviewController {
     public ResponseEntity<Map<String, Object>> governanceStatus() {
         return ResponseEntity.ok(Map.of(
                 "status", "ACTIVE",
-                "rulesCatalog", SecurityRule.values().length,
+                "rulesCatalog", SecurityRule.getCoreSecurityRulesCount(),
+                "totalRules", SecurityRule.values().length,
+                "architecturalRules", SecurityRule.values().length - SecurityRule.getCoreSecurityRulesCount(),
                 "defaultPolicy", SentinelPolicy.DEFAULT_POLICY_NAME,
                 "baselineEngine", "SentinelBaselineSnapshot v" + com.sentinelpr.core.governance.baseline.BaselineSnapshot.CURRENT_VERSION,
                 "complianceStandards", List.of("SOC2-CC7.1", "ISO27001-A.12.6.1", "OWASP-TOP-10", "CWE-SANS-TOP-25"),

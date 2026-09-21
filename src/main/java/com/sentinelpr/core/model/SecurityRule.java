@@ -63,6 +63,26 @@ public enum SecurityRule {
             "Spring Permissive CORS Policy",
             Severity.MEDIUM,
             "CWE-942: Permissive CORS policy with wildcard origin '*' allows unauthorized cross-origin requests."
+    ),
+
+    // Architectural Hygiene Rules (P4)
+    ARCH_CYCLIC_DEPENDENCY(
+            "ARCH-001-CYCLIC-DEPENDENCY",
+            "Architectural Cyclic Dependency",
+            Severity.MEDIUM,
+            "CWE-1047: Circular dependencies between packages or classes violate modular layering and impair maintainability."
+    ),
+    ARCH_LEAKY_ABSTRACTION(
+            "ARCH-002-LEAKY-ABSTRACTION",
+            "Leaky Entity Abstraction in REST Controller",
+            Severity.HIGH,
+            "CWE-497: Database entity classes exposed directly in @RestController endpoints leak internal schema details without DTO encapsulation."
+    ),
+    ARCH_NON_DETERMINISTIC_CALL(
+            "ARCH-003-NON-DETERMINISTIC-CALLS",
+            "Non-Deterministic Time or Random Invocation",
+            Severity.MEDIUM,
+            "Direct invocations of System.currentTimeMillis() or Random in business services prevent deterministic testing; inject java.time.Clock or SecureRandom."
     );
 
     private final String ruleId;
@@ -91,5 +111,19 @@ public enum SecurityRule {
 
     public String getExplanation() {
         return explanation;
+    }
+
+    public boolean isArchitecturalRule() {
+        return ruleId.startsWith("ARCH-");
+    }
+
+    public static SecurityRule[] getCoreSecurityRules() {
+        return java.util.Arrays.stream(values())
+                .filter(r -> !r.isArchitecturalRule())
+                .toArray(SecurityRule[]::new);
+    }
+
+    public static int getCoreSecurityRulesCount() {
+        return 10;
     }
 }

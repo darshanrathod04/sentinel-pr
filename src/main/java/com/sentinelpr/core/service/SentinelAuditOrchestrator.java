@@ -3,6 +3,9 @@ package com.sentinelpr.core.service;
 import com.sentinelpr.core.analysis.DataflowTracker;
 import com.sentinelpr.core.analysis.SuppressionManager;
 import com.sentinelpr.core.analysis.SuppressionResult;
+import com.sentinelpr.core.analysis.calibration.ConfidenceCalibrator;
+import com.sentinelpr.core.analysis.causal.CausalAnalysisEngine;
+import com.sentinelpr.core.model.CoordinatedPatchPlan;
 import com.sentinelpr.core.model.InspectedSource;
 import com.sentinelpr.core.model.ReviewReport;
 import com.sentinelpr.core.model.SecurityFinding;
@@ -37,7 +40,8 @@ import java.util.UUID;
  *   <li>False positive suppression engine (annotations, inline comments, .sentinelignore)</li>
  *   <li>Incremental PR diff filtering (diff baseline separation)</li>
  *   <li>Enterprise technical debt baseline evaluation (BASELINE_ACCEPTED)</li>
- *   <li>Atomic patch composition and regression verification</li>
+ *   <li>Deep cognitive causal analysis (CausalAnalysisEngine) & confidence calibration</li>
+ *   <li>Atomic patch composition, multi-file coordinated planning, and regression verification</li>
  *   <li>Session memory persistence</li>
  * </ol>
  */
@@ -52,6 +56,9 @@ public class SentinelAuditOrchestrator {
     private final DataflowTracker dataflowTracker;
     private final IncrementalDiffScanner diffScanner;
     private final BaselineManager baselineManager;
+    private final CausalAnalysisEngine causalAnalysisEngine;
+    private final ConfidenceCalibrator confidenceCalibrator;
+    private final MultiFileFixPlanner multiFileFixPlanner;
 
     public SentinelAuditOrchestrator(
             CodeInspectionService inspectionService,
@@ -95,6 +102,23 @@ public class SentinelAuditOrchestrator {
             IncrementalDiffScanner diffScanner,
             BaselineManager baselineManager
     ) {
+        this(inspectionService, evaluationService, patchService, sessionMemory, suppressionManager, dataflowTracker, diffScanner, baselineManager,
+                new CausalAnalysisEngine(), new ConfidenceCalibrator(), new MultiFileFixPlanner());
+    }
+
+    public SentinelAuditOrchestrator(
+            CodeInspectionService inspectionService,
+            RuleEvaluationService evaluationService,
+            AutomatedPatchService patchService,
+            ReviewSessionMemory sessionMemory,
+            SuppressionManager suppressionManager,
+            DataflowTracker dataflowTracker,
+            IncrementalDiffScanner diffScanner,
+            BaselineManager baselineManager,
+            CausalAnalysisEngine causalAnalysisEngine,
+            ConfidenceCalibrator confidenceCalibrator,
+            MultiFileFixPlanner multiFileFixPlanner
+    ) {
         this.inspectionService = Objects.requireNonNull(inspectionService, "inspectionService must not be null");
         this.evaluationService = Objects.requireNonNull(evaluationService, "evaluationService must not be null");
         this.patchService = Objects.requireNonNull(patchService, "patchService must not be null");
@@ -103,6 +127,9 @@ public class SentinelAuditOrchestrator {
         this.dataflowTracker = Objects.requireNonNull(dataflowTracker, "dataflowTracker must not be null");
         this.diffScanner = Objects.requireNonNull(diffScanner, "diffScanner must not be null");
         this.baselineManager = Objects.requireNonNull(baselineManager, "baselineManager must not be null");
+        this.causalAnalysisEngine = Objects.requireNonNull(causalAnalysisEngine, "causalAnalysisEngine must not be null");
+        this.confidenceCalibrator = Objects.requireNonNull(confidenceCalibrator, "confidenceCalibrator must not be null");
+        this.multiFileFixPlanner = Objects.requireNonNull(multiFileFixPlanner, "multiFileFixPlanner must not be null");
     }
 
     /**
@@ -149,15 +176,25 @@ public class SentinelAuditOrchestrator {
         List<UnifiedDiffPatch> allPatches = new ArrayList<>();
 
         for (InspectedSource source : sources) {
-            List<SecurityFinding> rawFindings = evaluationService.evaluate(source);
+            List<SecurityFinding> rawFindings = evaluationService.evaluate(source, sources);
 
             List<SecurityFinding> activeSourceFindings = new ArrayList<>();
-            for (SecurityFinding finding : rawFindings) {
-                SuppressionResult sup = suppressionManager.evaluateSuppression(finding, source, targetPath);
-                if (sup.isSuppressed()) {
-                    allSuppressedFindings.add(new SuppressedFinding(finding, sup.getReason(), sup.getType()));
+            for (SecurityFinding raw : rawFindings) {
+                SecurityFinding enriched = causalAnalysisEngine.enrichFinding(raw, source);
+                ConfidenceCalibrator.CalibrationResult cal = confidenceCalibrator.calibrate(enriched, source);
+                SecurityFinding finding = enriched.withCalibratedConfidence(cal.getScore(), cal.getExploitabilityIndex());
+
+                if (cal.isLowConfidence()) {
+                    String reason = String.format("Calibrated confidence score (%.2f) below threshold (%.2f)",
+                            cal.getScore(), confidenceCalibrator.getMinConfidenceThreshold());
+                    allSuppressedFindings.add(new SuppressedFinding(finding, reason, ConfidenceCalibrator.LOW_CONFIDENCE_SUPPRESSION_TYPE));
                 } else {
-                    activeSourceFindings.add(finding);
+                    SuppressionResult sup = suppressionManager.evaluateSuppression(finding, source, targetPath);
+                    if (sup.isSuppressed()) {
+                        allSuppressedFindings.add(new SuppressedFinding(finding, sup.getReason(), sup.getType()));
+                    } else {
+                        activeSourceFindings.add(finding);
+                    }
                 }
             }
 
@@ -290,21 +327,31 @@ public class SentinelAuditOrchestrator {
         List<UnifiedDiffPatch> allPatches = new ArrayList<>();
 
         for (InspectedSource source : sources) {
-            List<SecurityFinding> rawFindings = evaluationService.evaluate(source);
+            List<SecurityFinding> rawFindings = evaluationService.evaluate(source, sources);
 
             List<SecurityFinding> activeSourceFindings = new ArrayList<>();
-            for (SecurityFinding finding : rawFindings) {
-                SuppressionResult sup = suppressionManager.evaluateSuppression(finding, source, targetPath);
-                if (sup.isSuppressed()) {
-                    allSuppressedFindings.add(new SuppressedFinding(finding, sup.getReason(), sup.getType()));
-                } else if (diffScanner.isFindingInDiff(finding, diffs)) {
-                    activeSourceFindings.add(finding);
+            for (SecurityFinding raw : rawFindings) {
+                SecurityFinding enriched = causalAnalysisEngine.enrichFinding(raw, source);
+                ConfidenceCalibrator.CalibrationResult cal = confidenceCalibrator.calibrate(enriched, source);
+                SecurityFinding finding = enriched.withCalibratedConfidence(cal.getScore(), cal.getExploitabilityIndex());
+
+                if (cal.isLowConfidence()) {
+                    String reason = String.format("Calibrated confidence score (%.2f) below threshold (%.2f)",
+                            cal.getScore(), confidenceCalibrator.getMinConfidenceThreshold());
+                    allSuppressedFindings.add(new SuppressedFinding(finding, reason, ConfidenceCalibrator.LOW_CONFIDENCE_SUPPRESSION_TYPE));
                 } else {
-                    allSuppressedFindings.add(new SuppressedFinding(
-                            finding,
-                            "Baseline finding outside incremental PR diff range",
-                            "DIFF_BASELINE"
-                    ));
+                    SuppressionResult sup = suppressionManager.evaluateSuppression(finding, source, targetPath);
+                    if (sup.isSuppressed()) {
+                        allSuppressedFindings.add(new SuppressedFinding(finding, sup.getReason(), sup.getType()));
+                    } else if (diffScanner.isFindingInDiff(finding, diffs)) {
+                        activeSourceFindings.add(finding);
+                    } else {
+                        allSuppressedFindings.add(new SuppressedFinding(
+                                finding,
+                                "Baseline finding outside incremental PR diff range",
+                                "DIFF_BASELINE"
+                        ));
+                    }
                 }
             }
 
@@ -426,20 +473,30 @@ public class SentinelAuditOrchestrator {
         List<UnifiedDiffPatch> allPatches = new ArrayList<>();
 
         for (InspectedSource source : sources) {
-            List<SecurityFinding> rawFindings = evaluationService.evaluate(source);
+            List<SecurityFinding> rawFindings = evaluationService.evaluate(source, sources);
             List<SecurityFinding> activeSourceFindings = new ArrayList<>();
 
-            for (SecurityFinding finding : rawFindings) {
-                SuppressionResult sup = suppressionManager.evaluateSuppression(finding, source, targetPath);
-                if (sup.isSuppressed()) {
-                    allSuppressedFindings.add(new SuppressedFinding(finding, sup.getReason(), sup.getType()));
+            for (SecurityFinding raw : rawFindings) {
+                SecurityFinding enriched = causalAnalysisEngine.enrichFinding(raw, source);
+                ConfidenceCalibrator.CalibrationResult cal = confidenceCalibrator.calibrate(enriched, source);
+                SecurityFinding finding = enriched.withCalibratedConfidence(cal.getScore(), cal.getExploitabilityIndex());
+
+                if (cal.isLowConfidence()) {
+                    String reason = String.format("Calibrated confidence score (%.2f) below threshold (%.2f)",
+                            cal.getScore(), confidenceCalibrator.getMinConfidenceThreshold());
+                    allSuppressedFindings.add(new SuppressedFinding(finding, reason, ConfidenceCalibrator.LOW_CONFIDENCE_SUPPRESSION_TYPE));
                 } else {
-                    Optional<BaselineEntry> match = baseline.findMatchingEntry(finding);
-                    if (match.isPresent()) {
-                        String reason = String.format("Accepted technical debt present in baseline snapshot (fingerprint: %s)", match.get().getFingerprint());
-                        allSuppressedFindings.add(new SuppressedFinding(finding, reason, BaselineManager.SUPPRESSION_TYPE));
+                    SuppressionResult sup = suppressionManager.evaluateSuppression(finding, source, targetPath);
+                    if (sup.isSuppressed()) {
+                        allSuppressedFindings.add(new SuppressedFinding(finding, sup.getReason(), sup.getType()));
                     } else {
-                        activeSourceFindings.add(finding);
+                        Optional<BaselineEntry> match = baseline.findMatchingEntry(finding);
+                        if (match.isPresent()) {
+                            String reason = String.format("Accepted technical debt present in baseline snapshot (fingerprint: %s)", match.get().getFingerprint());
+                            allSuppressedFindings.add(new SuppressedFinding(finding, reason, BaselineManager.SUPPRESSION_TYPE));
+                        } else {
+                            activeSourceFindings.add(finding);
+                        }
                     }
                 }
             }
@@ -572,5 +629,85 @@ public class SentinelAuditOrchestrator {
 
     public BaselineManager getBaselineManager() {
         return baselineManager;
+    }
+
+    public CausalAnalysisEngine getCausalAnalysisEngine() {
+        return causalAnalysisEngine;
+    }
+
+    public ConfidenceCalibrator getConfidenceCalibrator() {
+        return confidenceCalibrator;
+    }
+
+    public MultiFileFixPlanner getMultiFileFixPlanner() {
+        return multiFileFixPlanner;
+    }
+
+    public Optional<CoordinatedPatchPlan> planCoordinatedFix(List<InspectedSource> sources, SecurityFinding finding) {
+        return multiFileFixPlanner.planCoordinatedFix(sources, finding);
+    }
+
+    /**
+     * Executes review across an in-memory collection of inspected sources.
+     */
+    public ReviewReport auditSources(List<InspectedSource> sources) {
+        if (sources == null || sources.isEmpty()) {
+            return new ReviewReport("REV-EMPTY", Instant.now(), "in-memory", 0, 0, "SUCCESS", false, "No sources provided", List.of(), List.of());
+        }
+
+        String reportId = "REV-" + UUID.randomUUID().toString().substring(0, 8);
+        List<SecurityFinding> allActiveFindings = new ArrayList<>();
+        List<SuppressedFinding> allSuppressedFindings = new ArrayList<>();
+        List<UnifiedDiffPatch> allPatches = new ArrayList<>();
+
+        for (InspectedSource source : sources) {
+            List<SecurityFinding> rawFindings = evaluationService.evaluate(source, sources);
+            List<SecurityFinding> activeSourceFindings = new ArrayList<>();
+
+            for (SecurityFinding raw : rawFindings) {
+                SecurityFinding enriched = causalAnalysisEngine.enrichFinding(raw, source);
+                ConfidenceCalibrator.CalibrationResult cal = confidenceCalibrator.calibrate(enriched, source);
+                SecurityFinding finding = enriched.withCalibratedConfidence(cal.getScore(), cal.getExploitabilityIndex());
+
+                if (cal.isLowConfidence()) {
+                    String reason = String.format("Calibrated confidence score (%.2f) below threshold (%.2f)",
+                            cal.getScore(), confidenceCalibrator.getMinConfidenceThreshold());
+                    allSuppressedFindings.add(new SuppressedFinding(finding, reason, ConfidenceCalibrator.LOW_CONFIDENCE_SUPPRESSION_TYPE));
+                } else {
+                    SuppressionResult sup = suppressionManager.evaluateSuppression(finding, source, null);
+                    if (sup.isSuppressed()) {
+                        allSuppressedFindings.add(new SuppressedFinding(finding, sup.getReason(), sup.getType()));
+                    } else {
+                        activeSourceFindings.add(finding);
+                    }
+                }
+            }
+
+            allActiveFindings.addAll(activeSourceFindings);
+
+            if (!activeSourceFindings.isEmpty()) {
+                List<UnifiedDiffPatch> patches = patchService.generatePatches(source, activeSourceFindings);
+                allPatches.addAll(patches);
+            }
+        }
+
+        String summary = String.format(
+                "Multi-source audit completed. Scanned %d source file(s), identified %d active finding(s) (%d suppressed), synthesized %d verified patch(es).",
+                sources.size(), allActiveFindings.size(), allSuppressedFindings.size(), allPatches.size()
+        );
+
+        return new ReviewReport(
+                reportId,
+                Instant.now(),
+                "multi-source",
+                sources.size(),
+                allActiveFindings.size(),
+                "SUCCESS",
+                false,
+                summary,
+                allActiveFindings,
+                allSuppressedFindings,
+                allPatches
+        );
     }
 }

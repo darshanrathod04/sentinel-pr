@@ -25,21 +25,36 @@ import java.util.Objects;
 public class RuleEvaluationService {
 
     private final SentinelClient client;
+    private final com.sentinelpr.core.analysis.architecture.ArchitectureReviewEngine architectureEngine;
 
     public RuleEvaluationService() {
-        this(SentinelClient.getInstance());
+        this(SentinelClient.getInstance(), new com.sentinelpr.core.analysis.architecture.ArchitectureReviewEngine());
     }
 
     public RuleEvaluationService(SentinelClient client) {
+        this(client, new com.sentinelpr.core.analysis.architecture.ArchitectureReviewEngine());
+    }
+
+    public RuleEvaluationService(SentinelClient client, com.sentinelpr.core.analysis.architecture.ArchitectureReviewEngine architectureEngine) {
         this.client = Objects.requireNonNull(client, "client must not be null");
+        this.architectureEngine = Objects.requireNonNull(architectureEngine, "architectureEngine must not be null");
     }
 
     /**
      * Evaluates all security and architectural rules on the inspected source.
      */
     public List<SecurityFinding> evaluate(InspectedSource inspectedSource) {
+        return evaluate(inspectedSource, List.of(inspectedSource));
+    }
+
+    /**
+     * Evaluates all security and architectural rules on the inspected source with project context.
+     */
+    public List<SecurityFinding> evaluate(InspectedSource inspectedSource, List<InspectedSource> allSources) {
         Objects.requireNonNull(inspectedSource, "inspectedSource must not be null");
-        return client.reasoning().evaluateAll(inspectedSource);
+        List<SecurityFinding> findings = new ArrayList<>(client.reasoning().evaluateAll(inspectedSource));
+        findings.addAll(architectureEngine.evaluate(inspectedSource, allSources != null ? allSources : List.of(inspectedSource)));
+        return findings;
     }
 
     /**
@@ -60,11 +75,14 @@ public class RuleEvaluationService {
             case HARDCODED_SECRET -> client.reasoning().evaluateHardcodedSecrets(inspectedSource);
             case SPRING_SECURITY_CSRF_DISABLED -> client.reasoning().evaluateSpringCsrfDisabled(inspectedSource);
             case SPRING_PERMISSIVE_CORS -> client.reasoning().evaluateSpringPermissiveCors(inspectedSource);
+            case ARCH_CYCLIC_DEPENDENCY -> architectureEngine.evaluateCyclicDependencies(inspectedSource, List.of(inspectedSource));
+            case ARCH_LEAKY_ABSTRACTION -> architectureEngine.evaluateLeakyAbstractions(inspectedSource);
+            case ARCH_NON_DETERMINISTIC_CALL -> architectureEngine.evaluateNonDeterministicCalls(inspectedSource);
         };
     }
 
     /**
-     * Evaluates multiple sources in batch.
+     * Evaluates multiple sources in batch with cross-file architectural analysis.
      */
     public List<SecurityFinding> evaluateAll(List<InspectedSource> sources) {
         if (sources == null || sources.isEmpty()) {
@@ -72,8 +90,12 @@ public class RuleEvaluationService {
         }
         List<SecurityFinding> allFindings = new ArrayList<>();
         for (InspectedSource source : sources) {
-            allFindings.addAll(evaluate(source));
+            allFindings.addAll(evaluate(source, sources));
         }
         return allFindings;
+    }
+
+    public com.sentinelpr.core.analysis.architecture.ArchitectureReviewEngine getArchitectureEngine() {
+        return architectureEngine;
     }
 }
