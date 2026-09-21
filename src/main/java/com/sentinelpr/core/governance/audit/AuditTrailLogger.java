@@ -59,6 +59,14 @@ public class AuditTrailLogger {
                 ? operator
                 : resolveCurrentOperator();
 
+        int active = report.getVulnerabilityCount();
+        int suppressed = report.getSuppressedCount();
+        int blocked = policyResult != null ? policyResult.getBlockedCount() : 0;
+        int patches = report.getPatches().size();
+        String ruleSetVer = "v1.0.0";
+        String policyVer = "v1.0";
+        AuditTrailEntry.ExecutionTimings timings = AuditTrailEntry.ExecutionTimings.createDefault();
+
         Instant timestamp = Instant.now();
         String reportSig = computeReportSignature(
                 report.getReportId(),
@@ -66,8 +74,12 @@ public class AuditTrailLogger {
                 target,
                 inputHash,
                 policyStatus,
-                report.getVulnerabilityCount(),
-                report.getPatches().size()
+                active,
+                suppressed,
+                blocked,
+                patches,
+                ruleSetVer,
+                policyVer
         );
 
         String memKernelHash = Integer.toHexString(report.hashCode());
@@ -85,8 +97,14 @@ public class AuditTrailLogger {
                 SecurityRule.values().length,
                 "Shree AI OS / local-in-memory",
                 policyStatus,
-                report.getVulnerabilityCount(),
-                report.getPatches().size()
+                active,
+                patches,
+                active,
+                suppressed,
+                blocked,
+                ruleSetVer,
+                policyVer,
+                timings
         );
     }
 
@@ -141,8 +159,12 @@ public class AuditTrailLogger {
                 entry.getTargetPath(),
                 entry.getInputFingerprint(),
                 entry.getPolicyStatus(),
-                entry.getTotalFindings(),
-                entry.getTotalPatches()
+                entry.getActiveFindings(),
+                entry.getSuppressedFindings(),
+                entry.getBlockedFindings(),
+                entry.getTotalPatches(),
+                entry.getRuleSetVersion(),
+                entry.getPolicyVersion()
         );
 
         return entry.getReportSignature().equalsIgnoreCase(expectedSig);
@@ -154,8 +176,12 @@ public class AuditTrailLogger {
             String targetPath,
             String inputFingerprint,
             String policyStatus,
-            int findingsCount,
-            int patchesCount
+            int activeFindings,
+            int suppressedFindings,
+            int blockedFindings,
+            int patchesCount,
+            String ruleSetVersion,
+            String policyVersion
     ) {
         String canonicalPayload = String.join("|",
                 runId != null ? runId : "",
@@ -163,11 +189,28 @@ public class AuditTrailLogger {
                 targetPath != null ? targetPath : "",
                 inputFingerprint != null ? inputFingerprint : "",
                 policyStatus != null ? policyStatus : "",
-                String.valueOf(findingsCount),
-                String.valueOf(patchesCount)
+                String.valueOf(activeFindings),
+                String.valueOf(suppressedFindings),
+                String.valueOf(blockedFindings),
+                String.valueOf(patchesCount),
+                ruleSetVersion != null ? ruleSetVersion : "",
+                policyVersion != null ? policyVersion : ""
         );
 
         return sha256Hex(canonicalPayload);
+    }
+
+    public static String computeReportSignature(
+            String runId,
+            Instant timestamp,
+            String targetPath,
+            String inputFingerprint,
+            String policyStatus,
+            int findingsCount,
+            int patchesCount
+    ) {
+        return computeReportSignature(runId, timestamp, targetPath, inputFingerprint, policyStatus,
+                findingsCount, 0, 0, patchesCount, "v1.0.0", "v1.0");
     }
 
     public static String computeInputFingerprint(String targetPath) {

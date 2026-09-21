@@ -46,9 +46,36 @@ public class PolicyEngine {
         int highCount = 0;
         int mediumCount = 0;
         int lowCount = 0;
+        int blockedCount = 0;
 
         List<String> violations = new ArrayList<>();
 
+        // Priority 1: Check blockedRules FIRST across ALL findings (active AND suppressed/baseline debt)
+        // Policy Supremacy: Blocked rules CANNOT be suppressed by baseline debt.
+        for (SecurityFinding f : report.getFindings()) {
+            String ruleId = f.getRule().getRuleId();
+            if (effectivePolicy.getBlockedRules().contains(ruleId)) {
+                blockedCount++;
+                violations.add(String.format(
+                        "Policy breach: Finding violates strictly blocked rule [%s] in %s (lines %d-%d): %s (BLOCKED_BY_POLICY)",
+                        ruleId, f.getTargetFile(), f.getStartLine(), f.getEndLine(), f.getDescription()
+                ));
+            }
+        }
+
+        for (com.sentinelpr.core.model.SuppressedFinding sf : report.getSuppressedFindings()) {
+            SecurityFinding f = sf.getFinding();
+            String ruleId = f.getRule().getRuleId();
+            if (effectivePolicy.getBlockedRules().contains(ruleId)) {
+                blockedCount++;
+                violations.add(String.format(
+                        "Policy breach: Finding present in baseline debt violates strictly blocked rule [%s] in %s (lines %d-%d): %s (BLOCKED_BY_POLICY: Baseline cannot suppress blocked rules)",
+                        ruleId, f.getTargetFile(), f.getStartLine(), f.getEndLine(), f.getDescription()
+                ));
+            }
+        }
+
+        // Priority 2: Severity defect counts on active findings
         for (SecurityFinding f : report.getFindings()) {
             Severity sev = f.getSeverity();
             if (sev == Severity.CRITICAL) {
@@ -59,15 +86,6 @@ public class PolicyEngine {
                 mediumCount++;
             } else if (sev == Severity.LOW || sev == Severity.INFO) {
                 lowCount++;
-            }
-
-            // Check blocked rules
-            String ruleId = f.getRule().getRuleId();
-            if (effectivePolicy.getBlockedRules().contains(ruleId)) {
-                violations.add(String.format(
-                        "Policy breach: Finding violates strictly blocked rule [%s] in %s (lines %d-%d): %s",
-                        ruleId, f.getTargetFile(), f.getStartLine(), f.getEndLine(), f.getDescription()
-                ));
             }
         }
 
@@ -110,22 +128,38 @@ public class PolicyEngine {
         }
 
         if (violations.isEmpty()) {
-            String summary = String.format(
-                    "Enterprise policy '%s' PASSED. All defect counts and rules are within permitted thresholds.",
-                    effectivePolicy.getPolicyName()
-            );
-            return PolicyEvaluationResult.passed(
-                    effectivePolicy.getPolicyName(),
-                    criticalCount,
-                    highCount,
-                    mediumCount,
-                    summary
-            );
+            if (report.getSuppressedCount() > 0) {
+                String summary = String.format(
+                        "Enterprise policy '%s' PASSED WITH BASELINE. Zero new active defects; %d technical debt item(s) accepted in baseline.",
+                        effectivePolicy.getPolicyName(), report.getSuppressedCount()
+                );
+                return PolicyEvaluationResult.passedWithBaseline(
+                        effectivePolicy.getPolicyName(),
+                        criticalCount,
+                        highCount,
+                        mediumCount,
+                        report.getSuppressedCount(),
+                        summary
+                );
+            } else {
+                String summary = String.format(
+                        "Enterprise policy '%s' PASSED. All defect counts and rules are within permitted thresholds.",
+                        effectivePolicy.getPolicyName()
+                );
+                return PolicyEvaluationResult.passed(
+                        effectivePolicy.getPolicyName(),
+                        criticalCount,
+                        highCount,
+                        mediumCount,
+                        summary
+                );
+            }
         } else {
             String summary = String.format(
-                    "Enterprise policy '%s' BREACHED with %d violation(s). Audit gate failed.",
+                    "Enterprise policy '%s' BREACHED with %d violation(s) (%d blocked by policy). Audit gate failed.",
                     effectivePolicy.getPolicyName(),
-                    violations.size()
+                    violations.size(),
+                    blockedCount
             );
             return PolicyEvaluationResult.breached(
                     effectivePolicy.getPolicyName(),
@@ -134,6 +168,7 @@ public class PolicyEngine {
                     highCount,
                     mediumCount,
                     unverifiedPatchCount,
+                    blockedCount,
                     summary
             );
         }

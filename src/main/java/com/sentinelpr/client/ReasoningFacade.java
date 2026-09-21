@@ -83,13 +83,21 @@ public class ReasoningFacade {
      * Evaluates all security and architectural rules on the inspected source.
      */
     public List<SecurityFinding> evaluateAll(InspectedSource source) {
+        return evaluateAll(source, List.of(source));
+    }
+
+    /**
+     * Evaluates all security and architectural rules on the inspected source with cross-file context awareness.
+     */
+    public List<SecurityFinding> evaluateAll(InspectedSource source, List<InspectedSource> contextSources) {
         List<SecurityFinding> findings = new ArrayList<>();
+        List<InspectedSource> ctx = (contextSources != null && !contextSources.isEmpty()) ? contextSources : List.of(source);
         findings.addAll(evaluateFailOpenSecurity(source));
         findings.addAll(evaluateUnclosedIoStreams(source));
         findings.addAll(evaluateVolatileCompoundOps(source));
-        findings.addAll(evaluateSubprocessCalls(source));
-        findings.addAll(evaluateSqlInjection(source));
-        findings.addAll(evaluatePathTraversal(source));
+        findings.addAll(evaluateSubprocessCalls(source, ctx));
+        findings.addAll(evaluateSqlInjection(source, ctx));
+        findings.addAll(evaluatePathTraversal(source, ctx));
         findings.addAll(evaluateInsecureDeserialization(source));
         findings.addAll(evaluateHardcodedSecrets(source));
         findings.addAll(evaluateSpringCsrfDisabled(source));
@@ -276,8 +284,16 @@ public class ReasoningFacade {
      * Rule 4: Un-isolated subprocess calls with taint tracking enrichment.
      */
     public List<SecurityFinding> evaluateSubprocessCalls(InspectedSource source) {
+        return evaluateSubprocessCalls(source, List.of(source));
+    }
+
+    /**
+     * Rule 4: Un-isolated subprocess calls with cross-file context awareness.
+     */
+    public List<SecurityFinding> evaluateSubprocessCalls(InspectedSource source, List<InspectedSource> contextSources) {
         List<SecurityFinding> findings = new ArrayList<>();
         String pathStr = source.getFilePath() != null ? source.getFilePath().toString() : "UnknownSource.java";
+        List<InspectedSource> ctx = (contextSources != null && !contextSources.isEmpty()) ? contextSources : List.of(source);
 
         for (MethodCallExpr call : source.getMethodCalls()) {
             boolean isRuntimeExec = "exec".equals(call.getNameAsString())
@@ -294,13 +310,13 @@ public class ReasoningFacade {
                 double confidence = 0.94;
 
                 if (method != null) {
-                    List<TaintFlow> flows = dataflowTracker.analyzeMethod(method, pathStr);
+                    List<TaintFlow> flows = dataflowTracker.analyzeMethod(method, pathStr, ctx);
                     Optional<TaintFlow> matching = flows.stream()
-                            .filter(f -> f.getSink().getLine() == startLine && !f.isSanitized())
+                            .filter(f -> (f.getSink().getLine() == startLine || f.getSink().getTargetMethod().contains("exec")) && !f.isSanitized())
                             .findFirst();
 
                     if (matching.isPresent()) {
-                        rationale = "Taint trace: " + matching.get().formatTrace() + ". " + rationale;
+                        rationale = "Taint trace: " + matching.get().formatMultiHopTrace() + ". " + rationale;
                         confidence = 0.99;
                     }
                 }
@@ -392,8 +408,13 @@ public class ReasoningFacade {
     );
 
     public List<SecurityFinding> evaluateSqlInjection(InspectedSource source) {
+        return evaluateSqlInjection(source, List.of(source));
+    }
+
+    public List<SecurityFinding> evaluateSqlInjection(InspectedSource source, List<InspectedSource> contextSources) {
         List<SecurityFinding> findings = new ArrayList<>();
         String pathStr = source.getFilePath() != null ? source.getFilePath().toString() : "UnknownSource.java";
+        List<InspectedSource> ctx = (contextSources != null && !contextSources.isEmpty()) ? contextSources : List.of(source);
 
         for (MethodCallExpr call : source.getMethodCalls()) {
             String methodName = call.getNameAsString();
@@ -414,9 +435,9 @@ public class ReasoningFacade {
             Optional<TaintFlow> matchingFlow = Optional.empty();
             if (enclosingMethod != null) {
                 int callLine = call.getBegin().map(p -> p.line).orElse(0);
-                List<TaintFlow> flows = dataflowTracker.analyzeMethod(enclosingMethod, pathStr);
+                List<TaintFlow> flows = dataflowTracker.analyzeMethod(enclosingMethod, pathStr, ctx);
                 matchingFlow = flows.stream()
-                        .filter(f -> f.getSink().getLine() == callLine && !f.isSanitized())
+                        .filter(f -> (f.getSink().getLine() == callLine || f.getSink().getTargetMethod().contains(methodName)) && !f.isSanitized())
                         .findFirst();
                 if (matchingFlow.isPresent()) {
                     isVulnerable = true;
@@ -431,7 +452,7 @@ public class ReasoningFacade {
                 double confidence = 0.96;
 
                 if (matchingFlow.isPresent()) {
-                    rationale = "Taint trace: " + matchingFlow.get().formatTrace() + ". " + rationale;
+                    rationale = "Taint trace: " + matchingFlow.get().formatMultiHopTrace() + ". " + rationale;
                     confidence = 0.99;
                 }
 
@@ -455,6 +476,42 @@ public class ReasoningFacade {
             }
         }
 
+        // Check inter-procedural flows originating from this source that reach SQL sinks
+        if (source.getMethods() != null) {
+            for (MethodDeclaration method : source.getMethods()) {
+                String methodName = method.getNameAsString();
+                boolean alreadyReported = findings.stream().anyMatch(f -> f.getMethodName().equals(methodName));
+                if (alreadyReported) continue;
+
+                List<TaintFlow> flows = dataflowTracker.analyzeMethod(method, pathStr, ctx);
+                Optional<TaintFlow> sqlFlow = flows.stream()
+                        .filter(f -> f.getSink().getType() == com.sentinelpr.core.analysis.taint.TaintSink.SinkType.RAW_SQL && !f.isSanitized())
+                        .findFirst();
+
+                if (sqlFlow.isPresent()) {
+                    TaintFlow flow = sqlFlow.get();
+                    int startLine = method.getBegin().map(p -> p.line).orElse(0);
+                    int endLine = method.getEnd().map(p -> p.line).orElse(0);
+                    String rationale = "Taint trace: " + flow.formatMultiHopTrace() + ". Untrusted parameter flows through inter-procedural calls into downstream SQL execution sink without sanitization.";
+                    findings.add(new SecurityFinding(
+                            "FND-" + UUID.randomUUID().toString().substring(0, 8),
+                            SecurityRule.SQL_INJECTION,
+                            Severity.CRITICAL,
+                            pathStr,
+                            source.getPrimaryClassName(),
+                            methodName,
+                            startLine,
+                            endLine,
+                            method.getNameAsString() + "(...)",
+                            "SQL Injection vulnerability reaching sink via inter-procedural call",
+                            rationale,
+                            "Use parameterized queries or sanitize input before passing across service boundaries.",
+                            0.99
+                    ));
+                }
+            }
+        }
+
         return findings;
     }
 
@@ -465,8 +522,13 @@ public class ReasoningFacade {
     );
 
     public List<SecurityFinding> evaluatePathTraversal(InspectedSource source) {
+        return evaluatePathTraversal(source, List.of(source));
+    }
+
+    public List<SecurityFinding> evaluatePathTraversal(InspectedSource source, List<InspectedSource> contextSources) {
         List<SecurityFinding> findings = new ArrayList<>();
         String pathStr = source.getFilePath() != null ? source.getFilePath().toString() : "UnknownSource.java";
+        List<InspectedSource> ctx = (contextSources != null && !contextSources.isEmpty()) ? contextSources : List.of(source);
 
         // A. Object creations: new File(...), new FileInputStream(...), etc.
         for (ObjectCreationExpr creation : source.getObjectCreations()) {
@@ -490,7 +552,7 @@ public class ReasoningFacade {
                 continue;
             }
 
-            List<TaintFlow> flows = dataflowTracker.analyzeMethod(enclosingMethod, pathStr);
+            List<TaintFlow> flows = dataflowTracker.analyzeMethod(enclosingMethod, pathStr, ctx);
             Optional<TaintFlow> matching = flows.stream()
                     .filter(f -> f.getSink().getLine() == line && !f.isSanitized())
                     .findFirst();
@@ -498,7 +560,7 @@ public class ReasoningFacade {
             String rationale = "User-controlled input flows directly into file/path constructor without path normalization (.normalize() / getCanonicalFile()) or directory containment checks. Enables Path Traversal (CWE-22 / OWASP A01:2021) allowing unauthorized filesystem access.";
             double confidence = 0.95;
             if (matching.isPresent()) {
-                rationale = "Taint trace: " + matching.get().formatTrace() + ". " + rationale;
+                rationale = "Taint trace: " + matching.get().formatMultiHopTrace() + ". " + rationale;
                 confidence = 0.99;
             }
 
@@ -538,7 +600,7 @@ public class ReasoningFacade {
                 int endLine = call.getEnd().map(p -> p.line).orElse(line);
                 String methodName = enclosingMethod.getNameAsString();
 
-                List<TaintFlow> flows = dataflowTracker.analyzeMethod(enclosingMethod, pathStr);
+                List<TaintFlow> flows = dataflowTracker.analyzeMethod(enclosingMethod, pathStr, ctx);
                 Optional<TaintFlow> matching = flows.stream()
                         .filter(f -> f.getSink().getLine() == line && !f.isSanitized())
                         .findFirst();
@@ -546,7 +608,7 @@ public class ReasoningFacade {
                 String rationale = "User-controlled path input passed to Path." + name + "() without normalization (.normalize()) or directory containment validation (startsWith(baseDir)). Enables Path Traversal (CWE-22 / OWASP A01:2021).";
                 double confidence = 0.95;
                 if (matching.isPresent()) {
-                    rationale = "Taint trace: " + matching.get().formatTrace() + ". " + rationale;
+                    rationale = "Taint trace: " + matching.get().formatMultiHopTrace() + ". " + rationale;
                     confidence = 0.99;
                 }
 

@@ -17,7 +17,8 @@ public class UnifiedDiffPatch {
         SUCCESS,
         PARTIAL,
         FAILED,
-        SKIPPED
+        SKIPPED,
+        DEFERRED_TO_MULTI_FILE_PLAN
     }
 
     private final String findingId;
@@ -60,8 +61,10 @@ public class UnifiedDiffPatch {
         this.unifiedDiff = unifiedDiff != null ? unifiedDiff : "";
         this.patchedSource = patchedSource != null ? patchedSource : "";
         this.status = status != null ? status : Status.SUCCESS;
-        this.verified = verified;
-        this.regressionVerified = regressionVerified;
+        boolean diffValid = !this.unifiedDiff.isBlank();
+        boolean statusSuccess = this.status == Status.SUCCESS;
+        this.verified = statusSuccess && diffValid && verified;
+        this.regressionVerified = this.verified && regressionVerified;
         this.verificationMessage = verificationMessage != null ? verificationMessage : "";
     }
 

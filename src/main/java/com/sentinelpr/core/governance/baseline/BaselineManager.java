@@ -133,6 +133,22 @@ public class BaselineManager {
      * </ul>
      */
     public BaselineFilterResult filterWithBaseline(List<SecurityFinding> findings, BaselineSnapshot baseline) {
+        return filterWithBaseline(findings, baseline, null);
+    }
+
+    /**
+     * Filters findings against a baseline snapshot with policy awareness:
+     * <ul>
+     *   <li>Findings matching blocked rules in {@code policy} CANNOT be suppressed by baseline debt.</li>
+     *   <li>Other findings matching baseline are categorized as suppressed {@code BASELINE_ACCEPTED}.</li>
+     *   <li>New findings not in baseline remain active PR blockers.</li>
+     * </ul>
+     */
+    public BaselineFilterResult filterWithBaseline(
+            List<SecurityFinding> findings,
+            BaselineSnapshot baseline,
+            com.sentinelpr.core.governance.policy.SentinelPolicy policy
+    ) {
         if (baseline == null || baseline.getEntries().isEmpty() || findings == null || findings.isEmpty()) {
             return new BaselineFilterResult(findings != null ? findings : List.of(), List.of());
         }
@@ -141,6 +157,15 @@ public class BaselineManager {
         List<SuppressedFinding> suppressed = new ArrayList<>();
 
         for (SecurityFinding finding : findings) {
+            String ruleId = finding.getRule().getRuleId();
+            boolean isBlockedByPolicy = policy != null && policy.getBlockedRules() != null && policy.getBlockedRules().contains(ruleId);
+
+            if (isBlockedByPolicy) {
+                // Policy supremacy: Blocked rules cannot be suppressed by baseline snapshot
+                active.add(finding);
+                continue;
+            }
+
             Optional<BaselineEntry> match = baseline.findMatchingEntry(finding);
             if (match.isPresent()) {
                 BaselineEntry entry = match.get();

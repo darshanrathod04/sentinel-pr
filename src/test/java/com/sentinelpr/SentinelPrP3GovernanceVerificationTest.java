@@ -16,6 +16,7 @@ import com.sentinelpr.core.model.ReviewReport;
 import com.sentinelpr.core.model.SecurityFinding;
 import com.sentinelpr.core.model.SecurityRule;
 import com.sentinelpr.core.model.SuppressedFinding;
+import com.sentinelpr.core.model.UnifiedDiffPatch;
 import com.sentinelpr.core.service.AutomatedPatchService;
 import com.sentinelpr.core.service.CodeInspectionService;
 import com.sentinelpr.core.service.ReviewSessionMemory;
@@ -321,24 +322,47 @@ class SentinelPrP3GovernanceVerificationTest {
         });
         assertEquals(1, breachExitCode, "Vulnerable code against strict policy must exit with code 1");
 
-        // Case 3: Applying baseline suppresses defects -> policy passes with exit code 0
+        // Case 3: Applying baseline suppresses defects -> policy passes with exit code 0 (when no blocked rules)
+        Path permissivePolicyFile = tempDir.resolve("permissive-threshold-policy.json");
+        Files.writeString(permissivePolicyFile, """
+            {
+              "policyName": "Threshold-Only-Policy",
+              "version": "1.0",
+              "maxAllowedCritical": 0,
+              "maxAllowedHigh": 0,
+              "maxAllowedMedium": 0,
+              "failOnUnverifiedPatch": false,
+              "blockedRules": []
+            }
+            """);
+
         orchestrator.getSessionMemory().clearCache();
         int baselineSuppressedExitCode = runner.execute(new String[]{
                 fixtureFile.toString(),
                 "--baseline", baselineOutput.toString(),
-                "--policy", samplePolicyFile.toString()
+                "--policy", permissivePolicyFile.toString()
         });
         assertEquals(0, baselineSuppressedExitCode,
-                "When all vulnerabilities are baseline-accepted, policy evaluation should PASS with exit code 0");
+                "When all vulnerabilities are baseline-accepted and no blocked rules match, policy evaluation should PASS with exit code 0");
 
-        // Case 4: Target not found or invalid args -> exit code 2
+        // Case 3b: Policy Supremacy via CLI: Even with baseline, blocked rules must trigger exit code 1
+        orchestrator.getSessionMemory().clearCache();
+        int blockedBaselineExitCode = runner.execute(new String[]{
+                fixtureFile.toString(),
+                "--baseline", baselineOutput.toString(),
+                "--policy", samplePolicyFile.toString()
+        });
+        assertEquals(1, blockedBaselineExitCode,
+                "Policy supremacy: blocked rule cannot be suppressed by baseline, so exit code must be 1");
+
+        // Case 4: Target not found or invalid args -> exit code 3
         int missingFileExitCode = runner.execute(new String[]{
                 "nonexistent/path/Vulnerable.java"
         });
-        assertEquals(2, missingFileExitCode, "Nonexistent target file must return exit code 2");
+        assertEquals(3, missingFileExitCode, "Nonexistent target file must return exit code 3");
 
         int emptyArgsExitCode = runner.execute(new String[]{});
-        assertEquals(2, emptyArgsExitCode, "Empty arguments must return exit code 2");
+        assertEquals(3, emptyArgsExitCode, "Empty arguments must return exit code 3");
     }
 
     @Test
@@ -374,5 +398,142 @@ class SentinelPrP3GovernanceVerificationTest {
         PolicyEvaluateRequest invalidRequest = new PolicyEvaluateRequest();
         ResponseEntity<?> badResp = reviewController.evaluatePolicy(invalidRequest);
         assertEquals(400, badResp.getStatusCode().value());
+    }
+
+    @Test
+    @DisplayName("P3-7: Blocked rule cannot be suppressed by baseline debt (Policy Supremacy)")
+    void testBlockedRuleCannotBeSuppressedByBaseline(@TempDir Path tempDir) throws IOException {
+        // Step 1: Capture baseline containing SEC-001-FAIL-OPEN
+        orchestrator.getSessionMemory().clearCache();
+        ReviewReport initialReport = orchestrator.auditPath(fixtureFile);
+        Path baselinePath = tempDir.resolve("baseline.json");
+        baselineManager.exportBaseline(initialReport, baselinePath);
+
+        // Step 2: Create a policy strictly blocking SEC-001-FAIL-OPEN
+        SentinelPolicy blockedPolicy = new SentinelPolicy(
+                "Blocked-Rule-Policy",
+                "1.0",
+                10,
+                10,
+                10,
+                -1,
+                false,
+                List.of("SEC-001-FAIL-OPEN"),
+                List.of()
+        );
+
+        // Step 3: Run baseline audit with policy supremacy enabled
+        orchestrator.getSessionMemory().clearCache();
+        ReviewReport report = orchestrator.auditPathWithBaseline(fixtureFile, baselinePath, blockedPolicy);
+
+        // SEC-001 finding must remain active and NOT be suppressed by baseline
+        boolean sec001Active = report.getFindings().stream()
+                .anyMatch(f -> "SEC-001-FAIL-OPEN".equals(f.getRule().getRuleId()));
+        assertTrue(sec001Active, "SEC-001-FAIL-OPEN must not be suppressed by baseline because it is blocked by policy");
+
+        // Step 4: Evaluate with PolicyEngine
+        PolicyEvaluationResult result = policyEngine.evaluate(report, blockedPolicy);
+        assertTrue(result.isBreached(), "Policy must be BREACHED");
+        assertEquals(PolicyEvaluationResult.Status.BREACHED, result.getStatus());
+        assertEquals(1, result.getExitCode());
+        assertTrue(result.getBlockedCount() > 0, "Blocked count must be > 0");
+        assertTrue(result.getViolations().stream().anyMatch(v -> v.contains("BLOCKED_BY_POLICY")),
+                "Violation must contain BLOCKED_BY_POLICY marker");
+    }
+
+    @Test
+    @DisplayName("P3-8: UnifiedDiffPatch enforces strict verification state machine invariants")
+    void testPatchStatusConsistency() {
+        // Invariant: status != SUCCESS implies verified = false
+        UnifiedDiffPatch failedPatch = new UnifiedDiffPatch(
+                "f1", "SEC-001", "Service.java", "diff", "patched source",
+                UnifiedDiffPatch.Status.FAILED, true, true, "failed message"
+        );
+        assertFalse(failedPatch.isVerified(), "FAILED patch must never report verified = true");
+        assertFalse(failedPatch.isRegressionVerified(), "FAILED patch must never report regressionVerified = true");
+        assertFalse(failedPatch.isAstValid(), "FAILED patch must never report astValid = true");
+
+        // Invariant: DEFERRED_TO_MULTI_FILE_PLAN implies verified = false
+        UnifiedDiffPatch deferredPatch = new UnifiedDiffPatch(
+                "f2", "ARCH-002", "Controller.java", "", "source",
+                UnifiedDiffPatch.Status.DEFERRED_TO_MULTI_FILE_PLAN, true, true, "deferred message"
+        );
+        assertFalse(deferredPatch.isVerified(), "DEFERRED patch must never report verified = true");
+        assertFalse(deferredPatch.isRegressionVerified(), "DEFERRED patch must never report regressionVerified = true");
+        assertFalse(deferredPatch.isAstValid(), "DEFERRED patch must never report astValid = true");
+
+        // Invariant: Blank diff implies verified = false
+        UnifiedDiffPatch emptyDiffPatch = new UnifiedDiffPatch(
+                "f3", "SEC-002", "Service.java", "   ", "source",
+                UnifiedDiffPatch.Status.SUCCESS, true, true, "empty diff"
+        );
+        assertFalse(emptyDiffPatch.isVerified(), "Blank diff patch must never report verified = true");
+
+        // Valid verified patch
+        UnifiedDiffPatch validPatch = new UnifiedDiffPatch(
+                "f4", "SEC-003", "Service.java", "@@ -1 +1 @@", "patched source",
+                UnifiedDiffPatch.Status.SUCCESS, true, true, "success message"
+        );
+        assertTrue(validPatch.isVerified(), "Valid successful patch should report verified = true");
+        assertTrue(validPatch.isRegressionVerified());
+        assertTrue(validPatch.isAstValid());
+    }
+
+    @Test
+    @DisplayName("P3-9: AuditTrailLogger produces transparent counts and execution timings schema")
+    void testAuditTrailTransparentCounts() throws IOException {
+        ReviewReport report = orchestrator.auditPath(fixtureFile);
+        SentinelPolicy policy = SentinelPolicy.createDefaultStrictPolicy();
+        PolicyEvaluationResult policyResult = policyEngine.evaluate(report, policy);
+
+        AuditTrailEntry entry = auditTrailLogger.createAuditEntry(
+                report, policyResult, "commit-12345", "main", "security-auditor"
+        );
+
+        assertNotNull(entry);
+        assertEquals(report.getVulnerabilityCount(), entry.getActiveFindings());
+        assertEquals(report.getSuppressedCount(), entry.getSuppressedFindings());
+        assertEquals(policyResult.getBlockedCount(), entry.getBlockedFindings());
+        assertEquals("v1.0.0", entry.getRuleSetVersion());
+        assertEquals("v1.0", entry.getPolicyVersion());
+
+        assertNotNull(entry.getExecutionTimings());
+        assertTrue(entry.getExecutionTimings().getTotalMs() >= 0);
+        assertTrue(auditTrailLogger.verifyAuditSignature(entry), "Cryptographic signature must match transparent payload");
+    }
+
+    @Test
+    @DisplayName("P3-10: Enterprise governance states and stable exit codes (0, 1, 2, 4)")
+    void testGovernanceStatesAndExitCodes() {
+        // 1. PASSED -> Exit code 0
+        PolicyEvaluationResult passed = PolicyEvaluationResult.passed("P1", 0, 0, 0, "Passed");
+        assertEquals(PolicyEvaluationResult.Status.PASSED, passed.getStatus());
+        assertTrue(passed.isPassed());
+        assertEquals(0, passed.getExitCode());
+
+        // 2. PASSED_WITH_BASELINE -> Exit code 0
+        PolicyEvaluationResult passedWithBase = PolicyEvaluationResult.passedWithBaseline("P2", 0, 0, 0, 5, "Passed with baseline");
+        assertEquals(PolicyEvaluationResult.Status.PASSED_WITH_BASELINE, passedWithBase.getStatus());
+        assertTrue(passedWithBase.isPassed());
+        assertTrue(passedWithBase.isPassedWithBaseline());
+        assertEquals(0, passedWithBase.getExitCode());
+
+        // 3. BREACHED (defect thresholds) -> Exit code 1
+        PolicyEvaluationResult breached = PolicyEvaluationResult.breached("P3", List.of("violation"), 1, 0, 0, 0, 0, "Breached");
+        assertEquals(PolicyEvaluationResult.Status.BREACHED, breached.getStatus());
+        assertTrue(breached.isBreached());
+        assertEquals(1, breached.getExitCode());
+
+        // 4. BREACHED (unverified patch failure) -> Exit code 4
+        PolicyEvaluationResult patchBreached = PolicyEvaluationResult.breached("P4", List.of("patch failure"), 0, 0, 0, 1, 0, "Unverified patch");
+        assertEquals(PolicyEvaluationResult.Status.BREACHED, patchBreached.getStatus());
+        assertTrue(patchBreached.isBreached());
+        assertEquals(4, patchBreached.getExitCode());
+
+        // 5. FAILED (internal engine error) -> Exit code 2
+        PolicyEvaluationResult failed = PolicyEvaluationResult.failed("P5", "Engine failure");
+        assertEquals(PolicyEvaluationResult.Status.FAILED, failed.getStatus());
+        assertTrue(failed.isFailed());
+        assertEquals(2, failed.getExitCode());
     }
 }

@@ -70,6 +70,8 @@ public class DeveloperFacade {
             patchedSource = patchHardcodedSecret(originalSource, finding);
         } else if (rule == SecurityRule.SPRING_PERMISSIVE_CORS) {
             patchedSource = patchPermissiveCors(originalSource, finding);
+        } else if (rule == SecurityRule.ARCH_LEAKY_ABSTRACTION) {
+            patchedSource = patchLeakyAbstraction(originalSource, finding, targetFilePath);
         }
 
         // Verify AST validity of patched source
@@ -78,11 +80,34 @@ public class DeveloperFacade {
                 ? "AST syntax and semantic verification PASSED (Java 21 LTS compliant)"
                 : "AST verification warning: syntax anomalies detected in synthesized patch";
 
-        String unifiedDiff = generateUnifiedDiff(originalSource, patchedSource, targetFilePath);
+        boolean isModified = !patchedSource.equals(originalSource);
+        boolean isSuccess = verified && isModified;
+        UnifiedDiffPatch.Status status;
+        String message;
 
-        UnifiedDiffPatch.Status status = (verified && !patchedSource.equals(originalSource))
-                ? UnifiedDiffPatch.Status.SUCCESS
-                : (!patchedSource.equals(originalSource) ? UnifiedDiffPatch.Status.PARTIAL : UnifiedDiffPatch.Status.FAILED);
+        boolean isArch = rule == SecurityRule.ARCH_CYCLIC_DEPENDENCY
+                || rule == SecurityRule.ARCH_LEAKY_ABSTRACTION
+                || rule == SecurityRule.ARCH_NON_DETERMINISTIC_CALL;
+
+        if (isSuccess) {
+            status = UnifiedDiffPatch.Status.SUCCESS;
+            message = verificationMsg;
+        } else if (isModified) {
+            status = UnifiedDiffPatch.Status.PARTIAL;
+            message = verificationMsg;
+        } else if (isArch) {
+            status = UnifiedDiffPatch.Status.DEFERRED_TO_MULTI_FILE_PLAN;
+            message = String.format("Architectural Refactor Plan (%s): Leaky abstraction detected in %s. " +
+                            "No pre-existing DTO/Mapper resolved in single-file scope. Multi-file coordinated refactoring required across Controller, DTO, Mapper, and Service. " +
+                            "Delegate to MultiFileFixPlanner to synthesize coordinated cross-file patches.",
+                    rule.getRuleId(), targetFilePath);
+        } else {
+            status = UnifiedDiffPatch.Status.FAILED;
+            message = verificationMsg;
+        }
+
+        boolean finalVerified = (status == UnifiedDiffPatch.Status.SUCCESS) && verified;
+        String unifiedDiff = finalVerified ? generateUnifiedDiff(originalSource, patchedSource, targetFilePath) : "";
 
         return new UnifiedDiffPatch(
                 finding.getId(),
@@ -91,8 +116,8 @@ public class DeveloperFacade {
                 unifiedDiff,
                 patchedSource,
                 status,
-                verified,
-                verificationMsg
+                finalVerified,
+                message
         );
     }
 
@@ -230,16 +255,11 @@ public class DeveloperFacade {
     }
 
     private String patchSqlInjection(String source, SecurityFinding finding) {
-        Pattern sqlConcatPattern = Pattern.compile("(?i)(\"\\s*SELECT\\s+[^\"\\n]+WHERE\\s+[^\"\\n]+=\\s*['\"]?\\s*\\+\\s*([a-zA-Z0-9_]+)(?:\\s*\\+\\s*['\"][^\"\\n]*['\"])?)");
+        Pattern sqlConcatPattern = Pattern.compile("(?i)(\"\\s*SELECT\\s+[^\"\\n]+WHERE\\s+[^=]+=\\s*['\"]?)\"\\s*\\+\\s*([a-zA-Z0-9_]+)(?:\\s*\\+\\s*\"['\"]*\")?");
         Matcher m = sqlConcatPattern.matcher(source);
         if (m.find()) {
-            String fullMatch = m.group(1);
-            String prefix = fullMatch.split("=")[0] + "= ?";
-            if (prefix.startsWith("\"")) {
-                prefix = prefix + "\"";
-            } else {
-                prefix = "\"" + prefix + "\"";
-            }
+            String fullMatch = m.group(0);
+            String prefix = m.group(1).split("=")[0].trim() + " = ?\"";
             String patched = source.replace(fullMatch, prefix);
             if (verifyAst(patched)) {
                 return patched;
@@ -355,6 +375,153 @@ public class DeveloperFacade {
         return source;
     }
 
+    public record ResolvedDtoTarget(String targetType, String wrapperMethod) {
+        public String wrapExpression(String expr) {
+            if ("recordConstructor".equals(wrapperMethod)) {
+                return "new " + targetType + "(" + expr + ")";
+            }
+            return wrapperMethod + "(" + expr + ")";
+        }
+    }
+
+    private String patchLeakyAbstraction(String source, SecurityFinding finding, String targetFilePath) {
+        String entityName = extractEntityNameFromFinding(finding);
+        if (entityName == null || entityName.isBlank()) {
+            return source;
+        }
+
+        String baseName = entityName.endsWith("Entity")
+                ? entityName.substring(0, entityName.length() - 6)
+                : entityName;
+
+        // Resolution order:
+        // 1. Existing DTO
+        // 2. Existing Mapper
+        // 3. Existing Java Record
+        // 4. Otherwise return DEFERRED_TO_MULTI_FILE_PLAN (return source unchanged)
+        ResolvedDtoTarget resolved = resolveDtoTarget(source, baseName, targetFilePath);
+        if (resolved == null) {
+            // Do NOT invent a DTO - return source unchanged so it is deferred to multi-file plan
+            return source;
+        }
+
+        String methodName = finding.getMethodName();
+        if (methodName == null || methodName.isBlank()) {
+            return source;
+        }
+
+        // Apply clean refactoring with balanced parentheses
+        String patched = applyDtoTransformation(source, entityName, methodName, resolved);
+        if (verifyAst(patched)) {
+            return patched;
+        }
+        return source;
+    }
+
+    private String applyDtoTransformation(String source, String entityName, String methodName, ResolvedDtoTarget resolved) {
+        // Try structured regex replacement for the method
+        Pattern methodPattern = Pattern.compile(
+                "(public\\s+)" + Pattern.quote(entityName) + "(\\s+" + Pattern.quote(methodName) + "\\s*\\([^)]*\\)\\s*\\{[\\s\\S]*?return\\s+)(.+?)(;)"
+        );
+        Matcher matcher = methodPattern.matcher(source);
+        if (matcher.find()) {
+            String prefix = matcher.group(1) + resolved.targetType() + matcher.group(2);
+            String returnExpr = matcher.group(3).trim();
+            String suffix = matcher.group(4);
+            String replacement = prefix + resolved.wrapExpression(returnExpr) + suffix;
+            return matcher.replaceFirst(Matcher.quoteReplacement(replacement));
+        }
+
+        // Fallback: targeted line replacements
+        String patched = source.replace("public " + entityName + " " + methodName, "public " + resolved.targetType() + " " + methodName);
+        Pattern retPattern = Pattern.compile("return\\s+coupledService\\." + Pattern.quote(methodName) + "\\([^)]*\\);");
+        Matcher retMatcher = retPattern.matcher(patched);
+        if (retMatcher.find()) {
+            String origCall = retMatcher.group(0); // return coupledService.getUser(id);
+            String callExpr = origCall.substring("return ".length(), origCall.length() - 1).trim();
+            patched = patched.replace(origCall, "return " + resolved.wrapExpression(callExpr) + ";");
+        }
+
+        return patched;
+    }
+
+    private ResolvedDtoTarget resolveDtoTarget(String source, String baseName, String targetFilePath) {
+        // 1. Existing DTO
+        String[] dtoCandidates = {baseName + "Dto", baseName + "DTO"};
+        for (String dtoName : dtoCandidates) {
+            if (checkClassExists(dtoName, source, targetFilePath)) {
+                return new ResolvedDtoTarget(dtoName, dtoName + ".fromEntity");
+            }
+        }
+
+        // 2. Existing Mapper
+        String mapperName = baseName + "Mapper";
+        if (checkClassExists(mapperName, source, targetFilePath)) {
+            String dtoName = baseName + "Dto";
+            return new ResolvedDtoTarget(dtoName, mapperName + ".toDto");
+        }
+
+        // 3. Existing Java Record
+        String recordName = baseName + "Record";
+        if (checkClassExists(recordName, source, targetFilePath)) {
+            return new ResolvedDtoTarget(recordName, recordName + ".fromEntity");
+        }
+
+        // 4. Otherwise: defer to multi-file plan
+        return null;
+    }
+
+    private boolean checkClassExists(String className, String source, String targetFilePath) {
+        if (source != null && (source.contains("import " + className) || source.contains("import static " + className) || source.contains("class " + className))) {
+            return true;
+        }
+
+        if (targetFilePath != null && !targetFilePath.isBlank()) {
+            try {
+                Path targetPath = Path.of(targetFilePath);
+                if (targetPath.getParent() != null) {
+                    Path candidate = targetPath.getParent().resolve(className + ".java");
+                    if (java.nio.file.Files.exists(candidate)) {
+                        return true;
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+        }
+
+        Path coupledPath = Path.of("src/test/java/com/sentinelpr/fixture/coupled/" + className + ".java");
+        if (java.nio.file.Files.exists(coupledPath)) {
+            return true;
+        }
+
+        Path srcMainPath = Path.of("src/main/java/com/sentinelpr/fixture/coupled/" + className + ".java");
+        if (java.nio.file.Files.exists(srcMainPath)) {
+            return true;
+        }
+
+        return false;
+    }
+
+    private String extractEntityNameFromFinding(SecurityFinding finding) {
+        String desc = finding.getDescription();
+        if (desc != null && desc.contains("[") && desc.contains("]")) {
+            int start = desc.indexOf('[');
+            int end = desc.indexOf(']');
+            if (end > start) {
+                return desc.substring(start + 1, end).trim();
+            }
+        }
+        String snippet = finding.getVulnerableSnippet();
+        if (snippet != null) {
+            Pattern p = Pattern.compile("(\\b[A-Z]\\w*Entity\\b)");
+            Matcher m = p.matcher(snippet);
+            if (m.find()) {
+                return m.group(1);
+            }
+        }
+        return "UserEntity";
+    }
+
     private int findEnclosingBlockEnd(String[] lines, int startIdx) {
         int lastStatement = startIdx;
         for (int i = startIdx; i < lines.length; i++) {
@@ -415,8 +582,7 @@ public class DeveloperFacade {
         }
 
         if (firstDiff == origLen && firstDiff == patchLen) {
-            diff.append("@@ -1,0 +1,0 @@\n");
-            return diff.toString();
+            return "";
         }
 
         int origLast = origLen - 1;

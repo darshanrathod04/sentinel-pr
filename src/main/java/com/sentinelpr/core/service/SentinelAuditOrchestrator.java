@@ -451,12 +451,20 @@ public class SentinelAuditOrchestrator {
      * are suppressed as {@code BASELINE_ACCEPTED}, and only new defects trigger active findings.
      */
     public ReviewReport auditPathWithBaseline(Path targetPath, Path baselinePath) throws IOException {
+        return auditPathWithBaseline(targetPath, baselinePath, (com.sentinelpr.core.governance.policy.SentinelPolicy) null);
+    }
+
+    public ReviewReport auditPathWithBaseline(Path targetPath, Path baselinePath, com.sentinelpr.core.governance.policy.SentinelPolicy policy) throws IOException {
         Objects.requireNonNull(baselinePath, "baselinePath must not be null");
         BaselineSnapshot baseline = baselineManager.loadBaseline(baselinePath);
-        return auditPathWithBaseline(targetPath, baseline);
+        return auditPathWithBaseline(targetPath, baseline, policy);
     }
 
     public ReviewReport auditPathWithBaseline(Path targetPath, BaselineSnapshot baseline) throws IOException {
+        return auditPathWithBaseline(targetPath, baseline, null);
+    }
+
+    public ReviewReport auditPathWithBaseline(Path targetPath, BaselineSnapshot baseline, com.sentinelpr.core.governance.policy.SentinelPolicy policy) throws IOException {
         Objects.requireNonNull(targetPath, "targetPath must not be null");
         if (baseline == null || baseline.getEntries().isEmpty()) {
             return auditPath(targetPath);
@@ -490,12 +498,20 @@ public class SentinelAuditOrchestrator {
                     if (sup.isSuppressed()) {
                         allSuppressedFindings.add(new SuppressedFinding(finding, sup.getReason(), sup.getType()));
                     } else {
-                        Optional<BaselineEntry> match = baseline.findMatchingEntry(finding);
-                        if (match.isPresent()) {
-                            String reason = String.format("Accepted technical debt present in baseline snapshot (fingerprint: %s)", match.get().getFingerprint());
-                            allSuppressedFindings.add(new SuppressedFinding(finding, reason, BaselineManager.SUPPRESSION_TYPE));
-                        } else {
+                        String ruleId = finding.getRule().getRuleId();
+                        boolean isBlockedByPolicy = policy != null && policy.getBlockedRules() != null && policy.getBlockedRules().contains(ruleId);
+
+                        if (isBlockedByPolicy) {
+                            // Policy supremacy: Blocked rules cannot be suppressed by baseline debt
                             activeSourceFindings.add(finding);
+                        } else {
+                            Optional<BaselineEntry> match = baseline.findMatchingEntry(finding);
+                            if (match.isPresent()) {
+                                String reason = String.format("Accepted technical debt present in baseline snapshot (fingerprint: %s)", match.get().getFingerprint());
+                                allSuppressedFindings.add(new SuppressedFinding(finding, reason, BaselineManager.SUPPRESSION_TYPE));
+                            } else {
+                                activeSourceFindings.add(finding);
+                            }
                         }
                     }
                 }
@@ -533,12 +549,16 @@ public class SentinelAuditOrchestrator {
      * Executes review combining both incremental PR diff filtering and baseline snapshot filtering.
      */
     public ReviewReport auditPathWithDiffAndBaseline(Path targetPath, String diffContent, Path baselinePath) throws IOException {
+        return auditPathWithDiffAndBaseline(targetPath, diffContent, baselinePath, null);
+    }
+
+    public ReviewReport auditPathWithDiffAndBaseline(Path targetPath, String diffContent, Path baselinePath, com.sentinelpr.core.governance.policy.SentinelPolicy policy) throws IOException {
         Objects.requireNonNull(targetPath, "targetPath must not be null");
         if (baselinePath == null || !Files.exists(baselinePath)) {
             return auditPathWithDiff(targetPath, diffContent);
         }
         if (diffContent == null || diffContent.isBlank()) {
-            return auditPathWithBaseline(targetPath, baselinePath);
+            return auditPathWithBaseline(targetPath, baselinePath, policy);
         }
 
         String reportId = "REV-" + UUID.randomUUID().toString().substring(0, 8);
@@ -561,12 +581,19 @@ public class SentinelAuditOrchestrator {
                 } else if (!diffScanner.isFindingInDiff(finding, diffs)) {
                     allSuppressedFindings.add(new SuppressedFinding(finding, "Baseline finding outside incremental PR diff range", "DIFF_BASELINE"));
                 } else {
-                    Optional<BaselineEntry> match = baseline.findMatchingEntry(finding);
-                    if (match.isPresent()) {
-                        String reason = String.format("Accepted technical debt present in baseline snapshot (fingerprint: %s)", match.get().getFingerprint());
-                        allSuppressedFindings.add(new SuppressedFinding(finding, reason, BaselineManager.SUPPRESSION_TYPE));
-                    } else {
+                    String ruleId = finding.getRule().getRuleId();
+                    boolean isBlockedByPolicy = policy != null && policy.getBlockedRules() != null && policy.getBlockedRules().contains(ruleId);
+
+                    if (isBlockedByPolicy) {
                         activeSourceFindings.add(finding);
+                    } else {
+                        Optional<BaselineEntry> match = baseline.findMatchingEntry(finding);
+                        if (match.isPresent()) {
+                            String reason = String.format("Accepted technical debt present in baseline snapshot (fingerprint: %s)", match.get().getFingerprint());
+                            allSuppressedFindings.add(new SuppressedFinding(finding, reason, BaselineManager.SUPPRESSION_TYPE));
+                        } else {
+                            activeSourceFindings.add(finding);
+                        }
                     }
                 }
             }

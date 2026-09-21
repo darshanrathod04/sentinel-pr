@@ -20,6 +20,13 @@ import com.sentinelpr.core.service.MultiFileFixPlanner;
 import com.sentinelpr.core.service.ReviewSessionMemory;
 import com.sentinelpr.core.service.RuleEvaluationService;
 import com.sentinelpr.core.service.SentinelAuditOrchestrator;
+import com.sentinelpr.cli.SentinelCliRunner;
+import com.sentinelpr.client.DeveloperFacade;
+import com.sentinelpr.client.MemoryFacade;
+import com.sentinelpr.core.analysis.DataflowTracker;
+import com.sentinelpr.core.analysis.taint.TaintFlow;
+import com.sentinelpr.core.governance.policy.PolicyEvaluationResult;
+import com.sentinelpr.core.model.UnifiedDiffPatch;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -60,6 +67,8 @@ class SentinelPrP4IntelligenceVerificationTest {
     private Path coupledControllerPath;
     private Path cyclicAPath;
     private Path cyclicBPath;
+    private Path interDataServicePath;
+    private Path interControllerPath;
 
     @BeforeEach
     void setUp() {
@@ -89,12 +98,16 @@ class SentinelPrP4IntelligenceVerificationTest {
         coupledControllerPath = Path.of("src/test/java/com/sentinelpr/fixture/coupled/CoupledController.java");
         cyclicAPath = Path.of("src/test/java/com/sentinelpr/fixture/coupled/cyclic/CyclicComponentA.java");
         cyclicBPath = Path.of("src/test/java/com/sentinelpr/fixture/coupled/cyclic/CyclicComponentB.java");
+        interDataServicePath = Path.of("src/test/java/com/sentinelpr/fixture/interprocedural/InterProceduralDataService.java");
+        interControllerPath = Path.of("src/test/java/com/sentinelpr/fixture/interprocedural/InterProceduralController.java");
 
         assertTrue(Files.exists(vulnerableServicePath), "Fixture must exist: " + vulnerableServicePath);
         assertTrue(Files.exists(coupledServicePath), "Fixture must exist: " + coupledServicePath);
         assertTrue(Files.exists(coupledControllerPath), "Fixture must exist: " + coupledControllerPath);
         assertTrue(Files.exists(cyclicAPath), "Fixture must exist: " + cyclicAPath);
         assertTrue(Files.exists(cyclicBPath), "Fixture must exist: " + cyclicBPath);
+        assertTrue(Files.exists(interDataServicePath), "Fixture must exist: " + interDataServicePath);
+        assertTrue(Files.exists(interControllerPath), "Fixture must exist: " + interControllerPath);
     }
 
     @Test
@@ -336,5 +349,160 @@ class SentinelPrP4IntelligenceVerificationTest {
             assertNotNull(f.getExploitabilityIndex(), "Finding must have ExploitabilityIndex");
             assertTrue(f.getConfidence() >= 0.70, "Active finding must meet confidence threshold");
         }
+    }
+
+    @Test
+    @DisplayName("P1-1: Inter-procedural taint tracking propagates Source -> Variable -> Param -> Return -> Field -> Sink across classes")
+    void testInterProceduralTaintPropagationAcrossMethods() throws IOException {
+        InspectedSource controllerSource = inspectionService.inspectFile(interControllerPath);
+        InspectedSource dataServiceSource = inspectionService.inspectFile(interDataServicePath);
+
+        DataflowTracker tracker = new DataflowTracker();
+        List<TaintFlow> flows = tracker.analyze(controllerSource, List.of(controllerSource, dataServiceSource));
+
+        assertNotNull(flows);
+        assertFalse(flows.isEmpty(), "Must discover inter-procedural taint flows");
+
+        // Verify flow reaching executeQuery SQL sink
+        TaintFlow sqlFlow = flows.stream()
+                .filter(f -> f.getSink().getTargetMethod().contains("executeQuery"))
+                .findFirst()
+                .orElse(null);
+        assertNotNull(sqlFlow, "Must discover taint flow reaching executeQuery sink");
+
+        // Verify multi-hop trace captures the full pipeline:
+        // Source (userInput) -> localFilter -> InterProceduralDataService.buildQueryFilter(filterInput) -> computedFilter -> InterProceduralDataService.executeDirectQuery(rawFilter) -> lastFilter (assign) -> sql -> executeQuery
+        String multiHopTrace = sqlFlow.formatMultiHopTrace();
+        assertTrue(multiHopTrace.contains("userInput"), "Trace must start at userInput parameter");
+        assertTrue(multiHopTrace.contains("localFilter"), "Trace must track local variable assignment");
+        assertTrue(multiHopTrace.contains("buildQueryFilter"), "Trace must record callee parameter in buildQueryFilter");
+        assertTrue(multiHopTrace.contains("computedFilter"), "Trace must record return-value propagation into computedFilter");
+        assertTrue(multiHopTrace.contains("executeDirectQuery"), "Trace must record inter-procedural call to executeDirectQuery");
+        assertTrue(multiHopTrace.contains("lastFilter"), "Trace must track field assignment to this.lastFilter");
+        assertTrue(multiHopTrace.contains("executeQuery"), "Trace must terminate at executeQuery sink");
+
+        // Verify integration with ReasoningFacade
+        List<SecurityFinding> findings = evaluationService.evaluate(controllerSource, List.of(controllerSource, dataServiceSource));
+        SecurityFinding sqlFinding = findings.stream()
+                .filter(f -> f.getRule() == SecurityRule.SQL_INJECTION)
+                .findFirst()
+                .orElse(null);
+        assertNotNull(sqlFinding, "ReasoningFacade must discover SQL_INJECTION via inter-procedural taint tracking");
+        assertTrue(sqlFinding.getCausalRationale().contains("Taint trace:"), "Rationale must include formatted taint trace");
+
+        // Verify CausalChain synthesis incorporates multi-hop hops
+        CausalChain chain = causalEngine.analyzeCausalChain(sqlFinding, controllerSource);
+        assertNotNull(chain);
+        assertEquals(CausalChain.BlastRadius.TENANT_DATA, chain.getBlastRadius());
+        assertTrue(chain.getPropagationHops().size() >= 4, "Must contain at least 4 propagation hops");
+        boolean hopsMentionInterProcedural = chain.getPropagationHops().stream().anyMatch(h -> h.contains("InterProcedural") || h.contains("buildQueryFilter") || h.contains("computedFilter"));
+        assertTrue(hopsMentionInterProcedural, "Propagation hops must reflect inter-procedural method trace");
+    }
+
+    @Test
+    @DisplayName("P1-4: DTO refactoring adheres to 4-tier resolution and synthesizes balanced parentheses")
+    void testDtoRefactorSyntaxAndResolutionTiers() throws IOException {
+        InspectedSource controllerSource = inspectionService.inspectFile(coupledControllerPath);
+        List<SecurityFinding> findings = architectureEngine.evaluateLeakyAbstractions(controllerSource);
+        assertFalse(findings.isEmpty(), "Must detect ARCH-002 on CoupledController");
+
+        SecurityFinding leakyFinding = findings.get(0);
+
+        // 1. Tier 1: Existing DTO Resolution with Balanced Parentheses
+        // CoupledController has existing UserDto in its package
+        AutomatedPatchService patchService = orchestrator.getPatchService();
+        UnifiedDiffPatch patch = patchService.generatePatch(controllerSource, leakyFinding);
+
+        assertNotNull(patch);
+        assertEquals(UnifiedDiffPatch.Status.SUCCESS, patch.getStatus());
+        assertTrue(patch.isVerified(), "AST must verify successfully with balanced parentheses: " + patch.getVerificationMessage());
+        assertTrue(patch.getUnifiedDiff().contains("UserDto.fromEntity(coupledService.getUser(id));"),
+                "Diff must contain complete, balanced parenthesis wrapping: " + patch.getUnifiedDiff());
+        assertFalse(patch.getUnifiedDiff().contains("UserDto.fromEntity(coupledService.getUser(id);"),
+                "Diff must NOT contain unbalanced parens");
+
+        // 2. Tier 4: DEFERRED_TO_MULTI_FILE_PLAN when no DTO/Mapper/Record exists
+        SecurityFinding syntheticFinding = new SecurityFinding(
+                "FND-UNRESOLVED",
+                SecurityRule.ARCH_LEAKY_ABSTRACTION,
+                Severity.HIGH,
+                controllerSource.getFilePath().toString(),
+                controllerSource.getPrimaryClassName(),
+                "getNonExistentEntity",
+                20,
+                24,
+                "public NonExistentEntity getNonExistentEntity() { return service.get(); }",
+                "Endpoint returns entity [NonExistentEntity] directly",
+                "Leaky abstraction",
+                "Expose DTO",
+                0.95
+        );
+
+        DeveloperFacade devFacade = client.developer();
+        UnifiedDiffPatch deferredPatch = devFacade.generatePatch(controllerSource, syntheticFinding);
+        // When no DTO/Mapper/Record exists, developer facade must NOT invent fake classes or emit invalid patches
+        // It returns unchanged or empty diff, deferring to multi-file planning
+        assertNotNull(deferredPatch);
+        assertTrue(deferredPatch.getUnifiedDiff().isBlank() || deferredPatch.getStatus() == UnifiedDiffPatch.Status.FAILED,
+                "Must defer unresolvable entity refactoring without inventing synthetic classes");
+    }
+
+    @Test
+    @DisplayName("P2: Memory history stores strictly metadata and supports CLI inspection")
+    void testMemoryHistoryMetadataAndCliInspection() throws IOException {
+        InspectedSource source = inspectionService.inspectFile(vulnerableServicePath);
+        ReviewReport report = orchestrator.auditPath(vulnerableServicePath);
+        PolicyEvaluationResult policyResult = PolicyEvaluationResult.passed(
+                "EnterpriseStandardPolicy",
+                0,
+                0,
+                0,
+                "All enterprise policy checks passed."
+        );
+
+        MemoryFacade memoryFacade = client.memoryFacade();
+        assertNotNull(memoryFacade, "MemoryFacade must be available from SentinelClient");
+
+        // 1. Record session metadata
+        MemoryFacade.AuditSessionMetadata meta = memoryFacade.recordSession(report, policyResult, 150L);
+        assertNotNull(meta, "Returned metadata must not be null");
+        String runId = meta.getRunId();
+        assertNotNull(runId, "Generated runId must not be null");
+
+        // 2. Retrieve session and verify ONLY metadata is stored (never raw source code or patch diffs)
+        var retrievedOpt = memoryFacade.getSession(runId);
+        assertTrue(retrievedOpt.isPresent(), "Session metadata must be retrievable by runId");
+        MemoryFacade.AuditSessionMetadata retrieved = retrievedOpt.get();
+        assertEquals(runId, retrieved.getRunId());
+        assertEquals("SUCCESS", retrieved.getStatus());
+        assertEquals("PASSED", retrieved.getPolicyStatus());
+        assertEquals(report.getVulnerabilityCount(), retrieved.getVulnerabilityCount());
+        assertNotNull(retrieved.getTimestamp(), "Timestamp must be recorded");
+
+        // Verify no raw code or patch bodies exist in memory
+        var storedFindings = retrieved.getFindings();
+        assertNotNull(storedFindings);
+        for (var fs : storedFindings) {
+            assertNotNull(fs.getRuleId());
+            assertNotNull(fs.getSeverity());
+            // FindingSummary has ruleId, severity, message - no raw code or AST nodes
+        }
+
+        // 3. Verify history formatting
+        String historyTable = memoryFacade.formatHistoryTable();
+        assertTrue(historyTable.contains(runId), "History table must list recorded runId");
+        assertTrue(historyTable.contains("PASSED"), "History table must display policy status");
+
+        String sessionDetail = memoryFacade.formatSessionDetail(runId);
+        assertTrue(sessionDetail.contains(runId), "Session detail must contain runId");
+        assertTrue(sessionDetail.contains("Duration:"), "Session detail must display duration");
+
+        // 4. Verify CLI Runner commands --history and --run
+        SentinelCliRunner runner = new SentinelCliRunner();
+        int historyExitCode = runner.execute(new String[]{"--history"});
+        assertEquals(0, historyExitCode, "CLI --history must exit with code 0");
+
+        int runDetailExitCode = runner.execute(new String[]{"--run", runId});
+        assertEquals(0, runDetailExitCode, "CLI --run <runId> must exit with code 0");
     }
 }

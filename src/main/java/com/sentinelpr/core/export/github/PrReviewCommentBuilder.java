@@ -140,17 +140,29 @@ public class PrReviewCommentBuilder {
      * Builds the complete GitHub PR Review payload without commit_id.
      */
     public GitHubReviewPayload buildReviewPayload(ReviewReport report) {
-        return buildReviewPayload(report, null);
+        return buildReviewPayload(report, null, null);
+    }
+
+    public GitHubReviewPayload buildReviewPayload(ReviewReport report, String commitId) {
+        return buildReviewPayload(report, null, commitId);
+    }
+
+    public GitHubReviewPayload buildReviewPayload(ReviewReport report, com.sentinelpr.core.governance.policy.PolicyEvaluationResult policyResult) {
+        return buildReviewPayload(report, policyResult, null);
     }
 
     /**
-     * Builds the complete GitHub PR Review payload with optional commit_id.
+     * Builds the complete GitHub PR Review payload with policy awareness and optional commit_id.
      */
-    public GitHubReviewPayload buildReviewPayload(ReviewReport report, String commitId) {
+    public GitHubReviewPayload buildReviewPayload(
+            ReviewReport report,
+            com.sentinelpr.core.governance.policy.PolicyEvaluationResult policyResult,
+            String commitId
+    ) {
         Objects.requireNonNull(report, "report must not be null");
 
-        String event = determineReviewEvent(report.getFindings());
-        String body = buildReviewSummaryMarkdown(report, event);
+        String event = determineReviewEvent(report, policyResult);
+        String body = buildReviewSummaryMarkdown(report, policyResult, event);
 
         List<GitHubInlineComment> comments = new ArrayList<>();
         for (SecurityFinding finding : report.getFindings()) {
@@ -222,46 +234,86 @@ public class PrReviewCommentBuilder {
         Files.writeString(outputPath, toJson(payload));
     }
 
-    /**
-     * Determines GitHub Review event:
-     * <ul>
-     *   <li>REQUEST_CHANGES if any CRITICAL or HIGH findings exist</li>
-     *   <li>COMMENT if only MEDIUM/LOW findings exist</li>
-     *   <li>APPROVE if 0 findings exist</li>
-     * </ul>
-     */
     public String determineReviewEvent(List<SecurityFinding> findings) {
-        if (findings == null || findings.isEmpty()) {
-            return "APPROVE";
-        }
-        for (SecurityFinding f : findings) {
-            if (f.getSeverity() == Severity.CRITICAL || f.getSeverity() == Severity.HIGH) {
-                return "REQUEST_CHANGES";
-            }
-        }
-        return "COMMENT";
+        return determineReviewEvent(findings, null, 0);
+    }
+
+    public String determineReviewEvent(
+            ReviewReport report,
+            com.sentinelpr.core.governance.policy.PolicyEvaluationResult policyResult
+    ) {
+        if (report == null) return "APPROVE";
+        return determineReviewEvent(report.getFindings(), policyResult, report.getSuppressedCount());
     }
 
     /**
-     * Formats the overall review summary in GitHub Flavored Markdown.
+     * Determines GitHub Review event:
+     * <ul>
+     *   <li>REQUEST_CHANGES if policy is BREACHED or any CRITICAL/HIGH findings exist</li>
+     *   <li>COMMENT if non-blocking medium/low findings exist</li>
+     *   <li>APPROVE if 0 active findings exist (with advisory note if baseline debt exists)</li>
+     * </ul>
      */
+    public String determineReviewEvent(
+            List<SecurityFinding> findings,
+            com.sentinelpr.core.governance.policy.PolicyEvaluationResult policyResult,
+            int suppressedCount
+    ) {
+        if (policyResult != null && policyResult.isBreached()) {
+            return "REQUEST_CHANGES";
+        }
+        if (findings != null) {
+            for (SecurityFinding f : findings) {
+                if (f.getSeverity() == Severity.CRITICAL || f.getSeverity() == Severity.HIGH) {
+                    return "REQUEST_CHANGES";
+                }
+            }
+        }
+        if (findings != null && !findings.isEmpty()) {
+            return "COMMENT";
+        }
+        return "APPROVE";
+    }
+
     public String buildReviewSummaryMarkdown(ReviewReport report, String event) {
+        return buildReviewSummaryMarkdown(report, null, event);
+    }
+
+    /**
+     * Formats the overall review summary in GitHub Flavored Markdown with honest status verdicts.
+     */
+    public String buildReviewSummaryMarkdown(
+            ReviewReport report,
+            com.sentinelpr.core.governance.policy.PolicyEvaluationResult policyResult,
+            String event
+    ) {
         StringBuilder sb = new StringBuilder();
 
         sb.append("## 🛡️ SentinelPR Code & Security Review\n\n");
 
-        if ("REQUEST_CHANGES".equals(event)) {
+        boolean isPolicyBreach = (policyResult != null && policyResult.isBreached());
+
+        if (isPolicyBreach || "REQUEST_CHANGES".equals(event)) {
             sb.append("> [!CAUTION]\n");
-            sb.append("> **Review Status: Changes Requested**\n");
-            sb.append("> Blocking security violations were detected in the active pull request diff. Immediate remediation is required before merging.\n\n");
+            if (isPolicyBreach || (policyResult != null && policyResult.getBlockedCount() > 0)) {
+                sb.append("> **❌ Review Status: Changes Requested (Blocked Policy Breach)**\n");
+                sb.append("> Blocking security violations or enterprise compliance policies were breached in the active pull request. Immediate remediation is required before merging.\n\n");
+            } else {
+                sb.append("> **❌ Review Status: Changes Requested**\n");
+                sb.append("> Blocking security violations were detected in the active pull request diff. Immediate remediation is required before merging.\n\n");
+            }
+        } else if (report.getVulnerabilityCount() == 0 && report.getSuppressedCount() > 0) {
+            sb.append("> [!WARNING]\n");
+            sb.append("> **⚠️ Review Status: Approved with Existing Technical Debt**\n");
+            sb.append("> Pull request introduces zero new active vulnerabilities, but accepted technical debt exists in the baseline repository snapshot. Ensure existing debt is remediated according to compliance schedules.\n\n");
         } else if ("COMMENT".equals(event)) {
             sb.append("> [!WARNING]\n");
             sb.append("> **Review Status: Warnings / Review Comments**\n");
             sb.append("> Non-blocking architectural or security observations identified. Please review suggested improvements.\n\n");
         } else {
             sb.append("> [!NOTE]\n");
-            sb.append("> **Review Status: Approved**\n");
-            sb.append("> Zero blocking security vulnerabilities identified in the inspected changes. Code passes SentinelPR audit gates.\n\n");
+            sb.append("> **✅ Review Status: Clean Approval**\n");
+            sb.append("> Zero blocking security vulnerabilities identified and zero baseline technical debt present. Code passes all SentinelPR audit gates.\n\n");
         }
 
         // Summary Statistics Table

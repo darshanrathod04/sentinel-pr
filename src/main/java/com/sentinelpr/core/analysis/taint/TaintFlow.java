@@ -67,6 +67,19 @@ public class TaintFlow {
         return sb.toString();
     }
 
+    public String formatMultiHopTrace() {
+        StringBuilder sb = new StringBuilder();
+        String src = source.getQualifiedName() != null && !source.getQualifiedName().isBlank()
+                ? source.getQualifiedName()
+                : source.getName();
+        sb.append(src);
+        for (String step : traceSteps) {
+            sb.append(" -> ").append(step);
+        }
+        sb.append(" -> ").append(sink.getTargetMethod());
+        return sb.toString();
+    }
+
     @Override
     public String toString() {
         return "TaintFlow{" + formatTrace() + "}";

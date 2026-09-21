@@ -159,26 +159,78 @@ public class CausalAnalysisEngine {
 
     private void buildSqlInjectionChain(CausalChain.Builder builder, SecurityFinding finding) {
         builder.trigger("Untrusted parameter passed into data-access layer")
-                .rootCauseElement("Raw SQL concatenation at lines " + finding.getStartLine() + "-" + finding.getEndLine())
-                .addHop("1. Method parameter receives unvalidated string input from API caller.")
-                .addHop("2. Input is concatenated directly into SQL command string without parameterized placeholders (?).")
-                .addHop("3. SQL sink executes command against persistence store.")
-                .addHop("4. Database query engine parses attacker-supplied SQL clauses.")
-                .exploitVector("Attacker injects SQL payloads (e.g., `' OR '1'='1'`) to extract sensitive rows or modify database state.")
+                .rootCauseElement("Raw SQL concatenation at lines " + finding.getStartLine() + "-" + finding.getEndLine());
+
+        String rationale = finding.getCausalRationale();
+        if (rationale != null && rationale.contains("Taint trace: ")) {
+            int start = rationale.indexOf("Taint trace: ") + "Taint trace: ".length();
+            int end = rationale.indexOf(". ", start);
+            if (end == -1) end = rationale.length();
+            String trace = rationale.substring(start, end).trim();
+            String[] segments = trace.split("\\s*->\\s*");
+            if (segments.length > 1) {
+                int hopNum = 1;
+                for (String seg : segments) {
+                    builder.addHop(hopNum++ + ". " + seg);
+                }
+                if (segments.length < 4) {
+                    builder.addHop(hopNum + ". Persistence query engine parses and executes un-sanitized SQL command.");
+                }
+            } else {
+                addDefaultSqlHops(builder, finding);
+            }
+        } else {
+            addDefaultSqlHops(builder, finding);
+        }
+
+        builder.exploitVector("Attacker injects SQL payloads (e.g., `' OR '1'='1'`) to extract sensitive rows or modify database state.")
                 .businessImpact("Complete database compromise, data exfiltration, or loss of data integrity.")
                 .blastRadius(BlastRadius.TENANT_DATA);
     }
 
+    private void addDefaultSqlHops(CausalChain.Builder builder, SecurityFinding finding) {
+        builder.addHop("1. Method parameter receives unvalidated string input from API caller.")
+                .addHop("2. Input is concatenated directly into SQL command string without parameterized placeholders (?).")
+                .addHop("3. SQL sink executes command against persistence store.")
+                .addHop("4. Database query engine parses attacker-supplied SQL clauses.");
+    }
+
     private void buildPathTraversalChain(CausalChain.Builder builder, SecurityFinding finding) {
         builder.trigger("Untrusted file path or filename parameter")
-                .rootCauseElement("Unchecked File/Path instantiation at lines " + finding.getStartLine() + "-" + finding.getEndLine())
-                .addHop("1. User provides relative path payload with '../' sequence.")
-                .addHop("2. Path is concatenated into File / Path object without canonicalization (.normalize()).")
-                .addHop("3. File system resolves path outside the intended base directory.")
-                .addHop("4. Sensitive system or tenant file is accessed or overwritten.")
-                .exploitVector("Attacker supplies traversal sequences (`../../etc/passwd`) to access files outside root storage.")
+                .rootCauseElement("Unchecked File/Path instantiation at lines " + finding.getStartLine() + "-" + finding.getEndLine());
+
+        String rationale = finding.getCausalRationale();
+        if (rationale != null && rationale.contains("Taint trace: ")) {
+            int start = rationale.indexOf("Taint trace: ") + "Taint trace: ".length();
+            int end = rationale.indexOf(". ", start);
+            if (end == -1) end = rationale.length();
+            String trace = rationale.substring(start, end).trim();
+            String[] segments = trace.split("\\s*->\\s*");
+            if (segments.length > 1) {
+                int hopNum = 1;
+                for (String seg : segments) {
+                    builder.addHop(hopNum++ + ". " + seg);
+                }
+                if (segments.length < 4) {
+                    builder.addHop(hopNum + ". File system resolves path outside the intended base directory.");
+                }
+            } else {
+                addDefaultPathTraversalHops(builder, finding);
+            }
+        } else {
+            addDefaultPathTraversalHops(builder, finding);
+        }
+
+        builder.exploitVector("Attacker supplies traversal sequences (`../../etc/passwd`) to access files outside root storage.")
                 .businessImpact("Arbitrary file read or write, potential host takeover, and credential leakage.")
                 .blastRadius(BlastRadius.SYSTEM_WIDE);
+    }
+
+    private void addDefaultPathTraversalHops(CausalChain.Builder builder, SecurityFinding finding) {
+        builder.addHop("1. User provides relative path payload with '../' sequence.")
+                .addHop("2. Path is concatenated into File / Path object without canonicalization (.normalize()).")
+                .addHop("3. File system resolves path outside the intended base directory.")
+                .addHop("4. Sensitive system or tenant file is accessed or overwritten.");
     }
 
     private void buildUnclosedStreamChain(CausalChain.Builder builder, SecurityFinding finding) {
@@ -207,14 +259,40 @@ public class CausalAnalysisEngine {
 
     private void buildSubprocessChain(CausalChain.Builder builder, SecurityFinding finding) {
         builder.trigger("Untrusted input passed to OS command execution")
-                .rootCauseElement("Runtime.exec / ProcessBuilder invocation at line " + finding.getStartLine())
-                .addHop("1. Method receives shell command arguments containing user-controlled characters.")
-                .addHop("2. Command is executed via shell sub-process without argument tokenization.")
-                .addHop("3. OS shell executes injected command chaining operators (; | &).")
-                .addHop("4. Attacker gains interactive command execution on the host machine.")
-                .exploitVector("Attacker appends command separators to execute arbitrary binaries under the application's UID.")
+                .rootCauseElement("Runtime.exec / ProcessBuilder invocation at line " + finding.getStartLine());
+
+        String rationale = finding.getCausalRationale();
+        if (rationale != null && rationale.contains("Taint trace: ")) {
+            int start = rationale.indexOf("Taint trace: ") + "Taint trace: ".length();
+            int end = rationale.indexOf(". ", start);
+            if (end == -1) end = rationale.length();
+            String trace = rationale.substring(start, end).trim();
+            String[] segments = trace.split("\\s*->\\s*");
+            if (segments.length > 1) {
+                int hopNum = 1;
+                for (String seg : segments) {
+                    builder.addHop(hopNum++ + ". " + seg);
+                }
+                if (segments.length < 4) {
+                    builder.addHop(hopNum + ". Subprocess environment executes un-sanitized arguments in system shell.");
+                }
+            } else {
+                addDefaultSubprocessHops(builder, finding);
+            }
+        } else {
+            addDefaultSubprocessHops(builder, finding);
+        }
+
+        builder.exploitVector("Attacker appends command separators to execute arbitrary binaries under the application's UID.")
                 .businessImpact("Complete host takeover, lateral movement across cluster, and infrastructure compromise.")
                 .blastRadius(BlastRadius.SYSTEM_WIDE);
+    }
+
+    private void addDefaultSubprocessHops(CausalChain.Builder builder, SecurityFinding finding) {
+        builder.addHop("1. Method receives shell command arguments containing user-controlled characters.")
+                .addHop("2. Command is executed via shell sub-process without argument tokenization.")
+                .addHop("3. OS shell executes injected command chaining operators (; | &).")
+                .addHop("4. Attacker gains interactive command execution on the host machine.");
     }
 
     private void buildDeserializationChain(CausalChain.Builder builder, SecurityFinding finding) {

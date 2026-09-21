@@ -45,6 +45,7 @@ public class SentinelCliRunner {
     private final BaselineManager baselineManager;
     private final PolicyEngine policyEngine;
     private final AuditTrailLogger auditTrailLogger;
+    private final com.sentinelpr.client.MemoryFacade memoryFacade;
     private final ObjectMapper objectMapper;
 
     public SentinelCliRunner() {
@@ -71,12 +72,25 @@ public class SentinelCliRunner {
             PolicyEngine policyEngine,
             AuditTrailLogger auditTrailLogger
     ) {
+        this(orchestrator, sarifGenerator, reviewCommentBuilder, baselineManager, policyEngine, auditTrailLogger, SentinelClient.getInstance().memoryFacade());
+    }
+
+    public SentinelCliRunner(
+            SentinelAuditOrchestrator orchestrator,
+            SarifReportGenerator sarifGenerator,
+            PrReviewCommentBuilder reviewCommentBuilder,
+            BaselineManager baselineManager,
+            PolicyEngine policyEngine,
+            AuditTrailLogger auditTrailLogger,
+            com.sentinelpr.client.MemoryFacade memoryFacade
+    ) {
         this.orchestrator = Objects.requireNonNull(orchestrator, "orchestrator must not be null");
         this.sarifGenerator = Objects.requireNonNull(sarifGenerator, "sarifGenerator must not be null");
         this.reviewCommentBuilder = Objects.requireNonNull(reviewCommentBuilder, "reviewCommentBuilder must not be null");
         this.baselineManager = Objects.requireNonNull(baselineManager, "baselineManager must not be null");
         this.policyEngine = Objects.requireNonNull(policyEngine, "policyEngine must not be null");
         this.auditTrailLogger = Objects.requireNonNull(auditTrailLogger, "auditTrailLogger must not be null");
+        this.memoryFacade = Objects.requireNonNull(memoryFacade, "memoryFacade must not be null");
         this.objectMapper = new ObjectMapper()
                 .registerModule(new JavaTimeModule())
                 .enable(SerializationFeature.INDENT_OUTPUT);
@@ -186,10 +200,11 @@ public class SentinelCliRunner {
             Path auditLogPath,
             String format
     ) {
+        long startTime = System.currentTimeMillis();
         try {
             if (targetPath == null || !Files.exists(targetPath)) {
                 System.err.println("[SentinelPR:CLI] Error: Target path not found: " + (targetPath != null ? targetPath.toAbsolutePath() : "null"));
-                return new CliExecutionResult(2, null, null, null);
+                return new CliExecutionResult(3, null, null, null);
             }
 
             System.out.println("================================================================================");
@@ -207,16 +222,30 @@ public class SentinelCliRunner {
             }
             System.out.println("================================================================================");
 
+            // Pre-load policy if specified
+            SentinelPolicy policy = null;
+            if (policyPath != null && Files.exists(policyPath)) {
+                policy = policyEngine.loadPolicy(policyPath);
+            }
+
             // Audit dispatch
             ReviewReport report;
             if (diffPath != null && Files.exists(diffPath) && baselinePath != null && Files.exists(baselinePath)) {
-                report = orchestrator.auditPathWithDiffAndBaseline(targetPath, Files.readString(diffPath), baselinePath);
+                report = orchestrator.auditPathWithDiffAndBaseline(targetPath, Files.readString(diffPath), baselinePath, policy);
             } else if (baselinePath != null && Files.exists(baselinePath)) {
-                report = orchestrator.auditPathWithBaseline(targetPath, baselinePath);
+                report = orchestrator.auditPathWithBaseline(targetPath, baselinePath, policy);
             } else if (diffPath != null && Files.exists(diffPath)) {
                 report = orchestrator.auditPathWithDiff(targetPath, diffPath);
             } else {
                 report = orchestrator.auditPath(targetPath);
+            }
+
+            // Policy evaluation
+            PolicyEvaluationResult policyResult = null;
+            int exitCode = 0;
+            if (policy != null) {
+                policyResult = policyEngine.evaluate(report, policy);
+                exitCode = policyResult.getExitCode();
             }
 
             System.out.println("\n--- [Audit Execution Summary] ---");
@@ -278,7 +307,7 @@ public class SentinelCliRunner {
                 }
                 case "github" -> {
                     System.out.println("\n--- [GitHub PR Review Payload] ---");
-                    System.out.println(reviewCommentBuilder.toJson(reviewCommentBuilder.buildReviewPayload(report)));
+                    System.out.println(reviewCommentBuilder.toJson(reviewCommentBuilder.buildReviewPayload(report, policyResult, "HEAD")));
                 }
                 case "text" -> {
                     // Summary already logged
@@ -289,22 +318,15 @@ public class SentinelCliRunner {
                 }
             }
 
-            // Policy evaluation
-            PolicyEvaluationResult policyResult = null;
-            int exitCode = 0;
-            if (policyPath != null) {
-                SentinelPolicy policy = policyEngine.loadPolicy(policyPath);
-                policyResult = policyEngine.evaluate(report, policy);
-
+            if (policyResult != null) {
                 if (policyResult.isBreached()) {
-                    exitCode = 1;
                     System.err.println("\n--- [Enterprise Policy Evaluation: BREACHED] ---");
                     System.err.println(policyResult.getSummary());
                     for (String violation : policyResult.getViolations()) {
                         System.err.println("  ❌ " + violation);
                     }
                 } else {
-                    System.out.println("\n--- [Enterprise Policy Evaluation: PASSED] ---");
+                    System.out.println("\n--- [Enterprise Policy Evaluation: " + policyResult.getStatus() + "] ---");
                     System.out.println(policyResult.getSummary());
                 }
             }
@@ -316,6 +338,10 @@ public class SentinelCliRunner {
                 auditTrailLogger.appendAuditLog(auditEntry, auditLogPath);
                 System.out.println("\n[SentinelPR:CLI] Cryptographic audit trail appended to: " + auditLogPath.toAbsolutePath());
             }
+
+            // Record audit session metadata into Memory Kernel (strictly metadata, no raw code or patches)
+            long durationMs = System.currentTimeMillis() - startTime;
+            memoryFacade.recordSession(report, policyResult, durationMs);
 
             return new CliExecutionResult(exitCode, report, policyResult, auditEntry);
 
@@ -329,15 +355,37 @@ public class SentinelCliRunner {
     /**
      * Executes CLI from command-line arguments string array, returning process exit code:
      * <ul>
-     *   <li>0: Audit passed & policy compliant</li>
-     *   <li>1: Policy breached</li>
-     *   <li>2: Execution error or invalid configuration</li>
+     *   <li>0: Audit passed & policy compliant (PASSED or PASSED_WITH_BASELINE), or History displayed</li>
+     *   <li>1: Policy breached (defect thresholds / blocked rules)</li>
+     *   <li>2: Internal engine error</li>
+     *   <li>3: Invalid CLI arguments or non-existent target path</li>
+     *   <li>4: Patch generation / verification failure</li>
      * </ul>
      */
     public int execute(String[] args) {
         if (args == null || args.length < 1) {
             printUsage();
-            return 2;
+            return 3;
+        }
+
+        boolean isHistory = false;
+        String historyRunId = null;
+        for (int i = 0; i < args.length; i++) {
+            String arg = args[i];
+            if ("--history".equalsIgnoreCase(arg) || "history".equalsIgnoreCase(arg)) {
+                isHistory = true;
+            } else if ("--run".equalsIgnoreCase(arg) && i + 1 < args.length) {
+                historyRunId = args[++i];
+            }
+        }
+
+        if (isHistory || historyRunId != null) {
+            if (historyRunId != null) {
+                System.out.println(memoryFacade.formatSessionDetail(historyRunId));
+            } else {
+                System.out.println(memoryFacade.formatHistoryTable());
+            }
+            return 0;
         }
 
         Path target = null;
@@ -372,7 +420,7 @@ public class SentinelCliRunner {
 
         if (target == null) {
             printUsage();
-            return 2;
+            return 3;
         }
 
         CliExecutionResult result = execute(target, diffPath, baselinePath, createBaselinePath, policyPath, sarifPath, auditLogPath, format);
@@ -394,7 +442,13 @@ public class SentinelCliRunner {
         System.out.println("  --policy <policy-file>         Enforce enterprise compliance policy thresholds");
         System.out.println("  --sarif <output-file>          Export OASIS SARIF v2.1.0 report");
         System.out.println("  --audit-log <ledger.log>       Append signed cryptographic SOC2/ISO27001 audit entry");
+        System.out.println("  --history                      Display review session history from Memory Kernel");
+        System.out.println("  --run <run-id>                 Inspect detailed metadata for a specific review session");
         System.out.println("  -f, --format <format>          Output format (json, sarif, github, text) [default: json]");
+    }
+
+    public com.sentinelpr.client.MemoryFacade getMemoryFacade() {
+        return memoryFacade;
     }
 
     public BaselineManager getBaselineManager() {

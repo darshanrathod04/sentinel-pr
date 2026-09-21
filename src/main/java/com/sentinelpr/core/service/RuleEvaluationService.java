@@ -52,7 +52,7 @@ public class RuleEvaluationService {
      */
     public List<SecurityFinding> evaluate(InspectedSource inspectedSource, List<InspectedSource> allSources) {
         Objects.requireNonNull(inspectedSource, "inspectedSource must not be null");
-        List<SecurityFinding> findings = new ArrayList<>(client.reasoning().evaluateAll(inspectedSource));
+        List<SecurityFinding> findings = new ArrayList<>(client.reasoning().evaluateAll(inspectedSource, allSources));
         findings.addAll(architectureEngine.evaluate(inspectedSource, allSources != null ? allSources : List.of(inspectedSource)));
         return findings;
     }

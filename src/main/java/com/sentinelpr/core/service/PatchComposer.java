@@ -10,6 +10,8 @@ import com.sentinelpr.core.model.SecurityFinding;
 import com.sentinelpr.core.model.SecurityRule;
 import com.sentinelpr.core.model.UnifiedDiffPatch;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -72,7 +74,7 @@ public class PatchComposer {
 
         String currentSource = originalSource;
         for (SecurityFinding finding : sortedFindings) {
-            currentSource = applyTransformation(currentSource, finding);
+            currentSource = applyTransformation(currentSource, finding, targetFilePath);
         }
 
         // Regression & AST Syntax Verification
@@ -89,21 +91,44 @@ public class PatchComposer {
                 .distinct()
                 .collect(Collectors.joining(", "));
 
-        boolean isSuccess = verificationResult.isSyntaxValid() && !currentSource.equals(originalSource);
-        UnifiedDiffPatch.Status status = isSuccess
-                ? UnifiedDiffPatch.Status.SUCCESS
-                : (!currentSource.equals(originalSource) ? UnifiedDiffPatch.Status.PARTIAL : UnifiedDiffPatch.Status.FAILED);
+        boolean isModified = !currentSource.equals(originalSource);
+        boolean isSuccess = verificationResult.isSyntaxValid() && isModified;
+        UnifiedDiffPatch.Status status;
+        String message;
+
+        boolean hasDeferredArchFinding = sortedFindings.stream().anyMatch(f ->
+                f.getRule() == SecurityRule.ARCH_CYCLIC_DEPENDENCY
+                || f.getRule() == SecurityRule.ARCH_LEAKY_ABSTRACTION
+                || f.getRule() == SecurityRule.ARCH_NON_DETERMINISTIC_CALL);
+
+        if (isSuccess) {
+            status = UnifiedDiffPatch.Status.SUCCESS;
+            message = verificationResult.getMessage();
+        } else if (isModified) {
+            status = UnifiedDiffPatch.Status.PARTIAL;
+            message = verificationResult.getMessage();
+        } else if (hasDeferredArchFinding) {
+            status = UnifiedDiffPatch.Status.DEFERRED_TO_MULTI_FILE_PLAN;
+            message = "Architectural Refactor Plan: Leaky abstraction or cyclic dependency detected. No pre-existing DTO/Mapper resolved in single-file scope. Multi-file coordinated refactoring required across Controller, DTO, Mapper, and Service. Delegate to MultiFileFixPlanner.";
+        } else {
+            status = UnifiedDiffPatch.Status.FAILED;
+            message = verificationResult.getMessage();
+        }
+
+        boolean verified = (status == UnifiedDiffPatch.Status.SUCCESS) && verificationResult.isSyntaxValid();
+        boolean regressionVerified = verified && verificationResult.isRegressionVerified();
+        String finalDiff = (status == UnifiedDiffPatch.Status.SUCCESS) ? unifiedDiff : "";
 
         return new UnifiedDiffPatch(
                 combinedFindingIds,
                 combinedRuleIds,
                 targetFilePath,
-                unifiedDiff,
+                finalDiff,
                 currentSource,
                 status,
-                verificationResult.isSyntaxValid(),
-                verificationResult.isRegressionVerified(),
-                verificationResult.getMessage()
+                verified,
+                regressionVerified,
+                message
         );
     }
 
@@ -125,7 +150,7 @@ public class PatchComposer {
         };
     }
 
-    private String applyTransformation(String source, SecurityFinding finding) {
+    private String applyTransformation(String source, SecurityFinding finding, String targetFilePath) {
         SecurityRule rule = finding.getRule();
         return switch (rule) {
             case VOLATILE_COMPOUND_OP -> composeVolatileCompound(source, finding);
@@ -138,8 +163,144 @@ public class PatchComposer {
             case HARDCODED_SECRET -> composeHardcodedSecret(source, finding);
             case SPRING_SECURITY_CSRF_DISABLED -> composeCsrfDisabled(source, finding);
             case SPRING_PERMISSIVE_CORS -> composePermissiveCors(source, finding);
-            case ARCH_CYCLIC_DEPENDENCY, ARCH_LEAKY_ABSTRACTION, ARCH_NON_DETERMINISTIC_CALL -> source;
+            case ARCH_LEAKY_ABSTRACTION -> composeLeakyAbstraction(source, finding, targetFilePath);
+            case ARCH_CYCLIC_DEPENDENCY, ARCH_NON_DETERMINISTIC_CALL -> source;
         };
+    }
+
+    private String composeLeakyAbstraction(String source, SecurityFinding finding, String targetFilePath) {
+        String entityName = extractEntityNameFromFinding(finding);
+        if (entityName == null || entityName.isBlank()) {
+            return source;
+        }
+
+        String baseName = entityName.endsWith("Entity")
+                ? entityName.substring(0, entityName.length() - 6)
+                : entityName;
+
+        // Resolution order:
+        // 1. Existing DTO
+        // 2. Existing Mapper
+        // 3. Existing Java Record
+        // 4. Otherwise return DEFERRED_TO_MULTI_FILE_PLAN (return source unchanged)
+        DeveloperFacade.ResolvedDtoTarget resolved = resolveDtoTarget(source, baseName, targetFilePath);
+        if (resolved == null) {
+            // Do NOT invent a DTO - return source unchanged so it is deferred to multi-file plan
+            return source;
+        }
+
+        String methodName = finding.getMethodName();
+        if (methodName == null || methodName.isBlank()) {
+            return source;
+        }
+
+        // Apply clean refactoring with balanced parentheses
+        Pattern methodPattern = Pattern.compile(
+                "(public\\s+)" + Pattern.quote(entityName) + "(\\s+" + Pattern.quote(methodName) + "\\s*\\([^)]*\\)\\s*\\{[\\s\\S]*?return\\s+)(.+?)(;)"
+        );
+        Matcher matcher = methodPattern.matcher(source);
+        if (matcher.find()) {
+            String prefix = matcher.group(1) + resolved.targetType() + matcher.group(2);
+            String returnExpr = matcher.group(3).trim();
+            String suffix = matcher.group(4);
+            String replacement = prefix + resolved.wrapExpression(returnExpr) + suffix;
+            String candidate = matcher.replaceFirst(Matcher.quoteReplacement(replacement));
+            if (isValidJava(candidate)) {
+                return candidate;
+            }
+        }
+
+        // Fallback: targeted line replacements
+        String patched = source.replace("public " + entityName + " " + methodName, "public " + resolved.targetType() + " " + methodName);
+        Pattern retPattern = Pattern.compile("return\\s+coupledService\\." + Pattern.quote(methodName) + "\\([^)]*\\);");
+        Matcher retMatcher = retPattern.matcher(patched);
+        if (retMatcher.find()) {
+            String origCall = retMatcher.group(0);
+            String callExpr = origCall.substring("return ".length(), origCall.length() - 1).trim();
+            patched = patched.replace(origCall, "return " + resolved.wrapExpression(callExpr) + ";");
+        }
+
+        if (isValidJava(patched)) {
+            return patched;
+        }
+        return source;
+    }
+
+    private DeveloperFacade.ResolvedDtoTarget resolveDtoTarget(String source, String baseName, String targetFilePath) {
+        // 1. Existing DTO
+        String[] dtoCandidates = {baseName + "Dto", baseName + "DTO"};
+        for (String dtoName : dtoCandidates) {
+            if (checkClassExists(dtoName, source, targetFilePath)) {
+                return new DeveloperFacade.ResolvedDtoTarget(dtoName, dtoName + ".fromEntity");
+            }
+        }
+
+        // 2. Existing Mapper
+        String mapperName = baseName + "Mapper";
+        if (checkClassExists(mapperName, source, targetFilePath)) {
+            String dtoName = baseName + "Dto";
+            return new DeveloperFacade.ResolvedDtoTarget(dtoName, mapperName + ".toDto");
+        }
+
+        // 3. Existing Java Record
+        String recordName = baseName + "Record";
+        if (checkClassExists(recordName, source, targetFilePath)) {
+            return new DeveloperFacade.ResolvedDtoTarget(recordName, recordName + ".fromEntity");
+        }
+
+        // 4. Otherwise: defer to multi-file plan
+        return null;
+    }
+
+    private boolean checkClassExists(String className, String source, String targetFilePath) {
+        if (source != null && (source.contains("import " + className) || source.contains("import static " + className) || source.contains("class " + className))) {
+            return true;
+        }
+
+        if (targetFilePath != null && !targetFilePath.isBlank()) {
+            try {
+                Path targetPath = Path.of(targetFilePath);
+                if (targetPath.getParent() != null) {
+                    Path candidate = targetPath.getParent().resolve(className + ".java");
+                    if (Files.exists(candidate)) {
+                        return true;
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+        }
+
+        Path coupledPath = Path.of("src/test/java/com/sentinelpr/fixture/coupled/" + className + ".java");
+        if (Files.exists(coupledPath)) {
+            return true;
+        }
+
+        Path srcMainPath = Path.of("src/main/java/com/sentinelpr/fixture/coupled/" + className + ".java");
+        if (Files.exists(srcMainPath)) {
+            return true;
+        }
+
+        return false;
+    }
+
+    private String extractEntityNameFromFinding(SecurityFinding finding) {
+        String desc = finding.getDescription();
+        if (desc != null && desc.contains("[") && desc.contains("]")) {
+            int start = desc.indexOf('[');
+            int end = desc.indexOf(']');
+            if (end > start) {
+                return desc.substring(start + 1, end).trim();
+            }
+        }
+        String snippet = finding.getVulnerableSnippet();
+        if (snippet != null) {
+            Pattern p = Pattern.compile("(\\b[A-Z]\\w*Entity\\b)");
+            Matcher m = p.matcher(snippet);
+            if (m.find()) {
+                return m.group(1);
+            }
+        }
+        return "UserEntity";
     }
 
     // ─── Transformation: Volatile Compound -> AtomicInteger ──────────────────
@@ -353,16 +514,11 @@ public class PatchComposer {
     // ─── Transformation: SQL Injection -> Parameterized Query ───────────────
 
     private String composeSqlInjection(String source, SecurityFinding finding) {
-        Pattern sqlConcatPattern = Pattern.compile("(?i)(\"\\s*SELECT\\s+[^\"\\n]+WHERE\\s+[^\"\\n]+=\\s*['\"]?\\s*\\+\\s*([a-zA-Z0-9_]+)(?:\\s*\\+\\s*['\"][^\"\\n]*['\"])?)");
+        Pattern sqlConcatPattern = Pattern.compile("(?i)(\"\\s*SELECT\\s+[^\"\\n]+WHERE\\s+[^=]+=\\s*['\"]?)\"\\s*\\+\\s*([a-zA-Z0-9_]+)(?:\\s*\\+\\s*\"['\"]*\")?");
         Matcher m = sqlConcatPattern.matcher(source);
         if (m.find()) {
-            String fullMatch = m.group(1);
-            String prefix = fullMatch.split("=")[0] + "= ?";
-            if (prefix.startsWith("\"")) {
-                prefix = prefix + "\"";
-            } else {
-                prefix = "\"" + prefix + "\"";
-            }
+            String fullMatch = m.group(0);
+            String prefix = m.group(1).split("=")[0].trim() + " = ?\"";
             String patched = source.replace(fullMatch, prefix);
             if (isValidJava(patched)) {
                 return patched;

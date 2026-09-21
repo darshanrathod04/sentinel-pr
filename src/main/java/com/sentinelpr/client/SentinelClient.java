@@ -35,6 +35,7 @@ public final class SentinelClient {
     private final ReasoningFacade reasoning;
     private final DeveloperFacade developer;
     private final MemorySDK memory;
+    private final MemoryFacade memoryFacade;
 
     private SentinelClient(ShreeAI shreeAi) {
         this.shreeAi = Objects.requireNonNull(shreeAi, "shreeAi must not be null");
@@ -43,6 +44,7 @@ public final class SentinelClient {
         this.reasoning = new ReasoningFacade(shreeAi);
         this.developer = new DeveloperFacade(shreeAi);
         this.memory = shreeAi.memory();
+        this.memoryFacade = new MemoryFacade(this.memory);
     }
 
     /**
@@ -136,6 +138,13 @@ public final class SentinelClient {
      */
     public MemorySDK memory() {
         return memory;
+    }
+
+    /**
+     * Memory history and audit session facade.
+     */
+    public MemoryFacade memoryFacade() {
+        return memoryFacade;
     }
 
     /**
