@@ -1,0 +1,7 @@
+{
+  "maxAllowedCritical": 0,
+  "maxAllowedHigh": 1,
+  "maxAllowedMedium": 5,
+  "failOnUnverifiedPatch": true,
+  "blockedRules": ["SEC-001-FAIL-OPEN"]
+}

@@ -10,6 +10,9 @@ import com.sentinelpr.core.model.Severity;
 import com.shreeai.os.platform.sdk.MemorySDK;
 import com.shreeai.os.platform.sdk.SDKResponse;
 
+import java.io.File;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -25,29 +28,56 @@ import java.util.Optional;
  * <p>Adapter over Shree AI OS {@link MemorySDK} for persisting and inspecting past SentinelPR
  * review session metadata.</p>
  *
- * <p><b>Strict Governance Guardrail:</b> Stores ONLY audit metadata (runId, fingerprint,
- * findings breakdown, severity, and timestamp). NEVER persists raw source code, patch bodies,
- * or file contents into long-term memory.</p>
+ * <p><b>Source of Truth:</b> {@link MemorySDK} remains the primary cognitive storage source of truth.
+ * A local workspace ledger ({@code .sentinelhistory.json}) provides durable cross-process survival
+ * for CLI invocations with schema versioning. The JSON ledger never overwrites MemorySDK during hydration.</p>
+ *
+ * <p><b>Strict Governance Guardrail:</b> Stores ONLY audit metadata (runId, timestamp, targetPath,
+ * policyStatus, status, severity counts, finding summaries, and durationMs).
+ * NEVER persists raw source code, unified diffs, or patch bodies into memory or ledger.</p>
  */
 public class MemoryFacade {
 
+    public static final String AUDIT_PREFIX = "AUDIT:";
+    public static final String AUDIT_INDEX_KEY = "AUDIT_INDEX";
+    public static final String SESSION_PREFIX = "SESSION:";
+    public static final String LEGACY_INDEX_KEY = "SESSION_INDEX";
+    public static final String DEFAULT_HISTORY_FILE = ".sentinelhistory.json";
+    public static final String CURRENT_SCHEMA_VERSION = "1.0.0";
+
     private final MemorySDK memorySdk;
     private final ObjectMapper objectMapper;
+    private final Path workspaceHistoryPath;
+    private final String workspaceId;
     private final Map<String, AuditSessionMetadata> fastSessionCache = new java.util.concurrent.ConcurrentHashMap<>();
     private final List<String> memoryIndex = new java.util.concurrent.CopyOnWriteArrayList<>();
 
-    private static final String SESSION_PREFIX = "SESSION:";
-    private static final String INDEX_KEY = "SESSION_INDEX";
-
     public MemoryFacade(MemorySDK memorySdk) {
+        this(memorySdk, Path.of(DEFAULT_HISTORY_FILE));
+    }
+
+    public MemoryFacade(MemorySDK memorySdk, Path workspaceHistoryPath) {
         this.memorySdk = Objects.requireNonNull(memorySdk, "memorySdk must not be null");
+        this.workspaceHistoryPath = workspaceHistoryPath != null ? workspaceHistoryPath : Path.of(DEFAULT_HISTORY_FILE);
+        this.workspaceId = computeWorkspaceId();
         this.objectMapper = new ObjectMapper()
                 .registerModule(new JavaTimeModule())
                 .setSerializationInclusion(JsonInclude.Include.NON_NULL);
     }
 
+    private static String computeWorkspaceId() {
+        try {
+            Path current = Path.of("").toAbsolutePath();
+            String name = current.getFileName() != null ? current.getFileName().toString() : "workspace";
+            return name + "-" + Integer.toHexString(current.toString().hashCode());
+        } catch (Exception e) {
+            return "sentinel-pr-workspace";
+        }
+    }
+
     /**
-     * Records audit review session metadata into the Memory Kernel.
+     * Records audit review session metadata into the Memory Kernel and durable workspace ledger.
+     * MemorySDK remains the primary source of truth.
      */
     public AuditSessionMetadata recordSession(ReviewReport report, PolicyEvaluationResult policyResult, long durationMs) {
         Objects.requireNonNull(report, "report must not be null");
@@ -101,23 +131,28 @@ public class MemoryFacade {
             memoryIndex.add(runId);
         }
 
+        // 1. Primary Source of Truth: Store into MemorySDK
         try {
             String json = objectMapper.writeValueAsString(metadata);
+            memorySdk.store(AUDIT_PREFIX + runId, json);
             memorySdk.store(SESSION_PREFIX + runId, json);
 
-            // Update session index
-            updateSessionIndex(runId);
+            updateSessionIndexInMemorySdk(runId);
         } catch (Exception e) {
-            System.err.println("[SentinelPR:MemoryFacade] Failed to store audit session metadata: " + e.getMessage());
+            System.err.println("[SentinelPR:MemoryFacade] Failed to store audit session metadata in MemorySDK: " + e.getMessage());
         }
+
+        // 2. Durable Workspace Ledger: Persist versioned schema to workspace disk
+        persistLedgerToDisk();
 
         return metadata;
     }
 
     /**
-     * Lists historical audit session metadata stored in Memory Kernel.
+     * Reads all historical audit session metadata stored in Memory Kernel / Workspace Ledger,
+     * returned in reverse chronological order (newest first).
      */
-    public List<AuditSessionMetadata> listHistory() {
+    public List<AuditSessionMetadata> readHistory() {
         List<String> runIds = getSessionIndex();
         List<AuditSessionMetadata> history = new ArrayList<>();
 
@@ -125,42 +160,81 @@ public class MemoryFacade {
             getSession(runId).ifPresent(history::add);
         }
 
+        // If history is still empty, load from disk ledger cache
+        if (history.isEmpty()) {
+            loadLedgerFromDisk();
+            for (String runId : memoryIndex) {
+                AuditSessionMetadata s = fastSessionCache.get(runId);
+                if (s != null && !history.contains(s)) {
+                    history.add(s);
+                }
+            }
+        }
+
+        // Sort in reverse chronological order (newest first)
+        history.sort((a, b) -> {
+            if (a.getTimestamp() == null && b.getTimestamp() == null) return 0;
+            if (a.getTimestamp() == null) return 1;
+            if (b.getTimestamp() == null) return -1;
+            return b.getTimestamp().compareTo(a.getTimestamp());
+        });
+
         return history;
     }
 
     /**
+     * Lists historical audit session metadata stored in Memory Kernel (alias for readHistory).
+     */
+    public List<AuditSessionMetadata> listHistory() {
+        return readHistory();
+    }
+
+    /**
      * Retrieves specific session metadata by run ID.
+     * MemorySDK remains the primary source of truth; falls back to workspace ledger cache without overwriting MemorySDK.
      */
     public Optional<AuditSessionMetadata> getSession(String runId) {
         if (runId == null || runId.isBlank()) {
             return Optional.empty();
         }
 
+        // 1. In-memory fast cache
         AuditSessionMetadata cached = fastSessionCache.get(runId);
         if (cached != null) {
             return Optional.of(cached);
         }
 
+        // 2. MemorySDK recall (Source of Truth)
         try {
-            SDKResponse resp = memorySdk.recall(SESSION_PREFIX + runId);
+            SDKResponse resp = memorySdk.recall(AUDIT_PREFIX + runId);
+            if (resp == null || resp.answer() == null || resp.answer().isBlank() || resp.answer().contains("not found")) {
+                resp = memorySdk.recall(SESSION_PREFIX + runId);
+            }
             if (resp != null && resp.answer() != null && !resp.answer().isBlank() && !resp.answer().contains("not found")) {
-                AuditSessionMetadata meta = objectMapper.readValue(resp.answer(), AuditSessionMetadata.class);
-                if (meta != null) {
-                    fastSessionCache.put(runId, meta);
-                    return Optional.of(meta);
+                try {
+                    AuditSessionMetadata meta = objectMapper.readValue(resp.answer(), AuditSessionMetadata.class);
+                    if (meta != null) {
+                        fastSessionCache.put(runId, meta);
+                        return Optional.of(meta);
+                    }
+                } catch (Exception ignored) {
+                    // Non-JSON answer from runtime LLM fallback
                 }
             }
-        } catch (Exception e) {
-            // ignore retrieval failure
+        } catch (Exception ignored) {
         }
-        return Optional.empty();
+
+        // 3. Fallback to durable workspace ledger cache (do NOT overwrite MemorySDK during hydration)
+        loadLedgerFromDisk();
+        cached = fastSessionCache.get(runId);
+        return Optional.ofNullable(cached);
     }
 
     /**
-     * Formats past review sessions as a CLI summary table.
+     * Formats past review sessions as a CLI summary table in reverse chronological order.
      */
     public String formatHistoryTable() {
-        List<AuditSessionMetadata> sessions = listHistory();
+        List<AuditSessionMetadata> sessions = readHistory();
         StringBuilder sb = new StringBuilder();
         sb.append("========================================================================================================================\n");
         sb.append("                                           SentinelPR Review Session History\n");
@@ -173,13 +247,13 @@ public class MemoryFacade {
             sb.append(" [No prior review sessions recorded in Memory Kernel]\n");
         } else {
             for (AuditSessionMetadata s : sessions) {
-                String targetDisplay = s.getTargetPath();
+                String targetDisplay = s.getTargetPath() != null ? s.getTargetPath() : "unknown";
                 if (targetDisplay.length() > 32) {
                     targetDisplay = "..." + targetDisplay.substring(targetDisplay.length() - 29);
                 }
                 String violStr = String.format("%d (Crit: %d)",
                         s.getVulnerabilityCount(),
-                        s.getSeverityCounts().getOrDefault("CRITICAL", 0));
+                        s.getSeverityCounts() != null ? s.getSeverityCounts().getOrDefault("CRITICAL", 0) : 0);
                 sb.append(String.format(" %-15s | %-20s | %-32s | %-16s | %-10s | %-8s%n",
                         s.getRunId(),
                         s.getTimestamp() != null ? s.getTimestamp().toString().substring(0, Math.min(19, s.getTimestamp().toString().length())) : "N/A",
@@ -215,15 +289,15 @@ public class MemoryFacade {
         sb.append(" Files Scanned:   ").append(s.getTotalFilesScanned()).append("\n");
         sb.append(" Vulnerabilities: ").append(s.getVulnerabilityCount())
                 .append(String.format(" (Critical: %d, High: %d, Medium: %d, Low: %d)%n",
-                        s.getSeverityCounts().getOrDefault("CRITICAL", 0),
-                        s.getSeverityCounts().getOrDefault("HIGH", 0),
-                        s.getSeverityCounts().getOrDefault("MEDIUM", 0),
-                        s.getSeverityCounts().getOrDefault("LOW", 0)));
+                        s.getSeverityCounts() != null ? s.getSeverityCounts().getOrDefault("CRITICAL", 0) : 0,
+                        s.getSeverityCounts() != null ? s.getSeverityCounts().getOrDefault("HIGH", 0) : 0,
+                        s.getSeverityCounts() != null ? s.getSeverityCounts().getOrDefault("MEDIUM", 0) : 0,
+                        s.getSeverityCounts() != null ? s.getSeverityCounts().getOrDefault("LOW", 0) : 0));
         sb.append(" Suppressed:      ").append(s.getSuppressedCount()).append("\n");
         sb.append(" Duration:        ").append(s.getTotalDurationMs()).append(" ms\n");
 
         sb.append("\n--- Findings Metadata (Source code redacted for governance) ---\n");
-        if (s.getFindings().isEmpty()) {
+        if (s.getFindings() == null || s.getFindings().isEmpty()) {
             sb.append("  [Clean - No vulnerabilities detected]\n");
         } else {
             for (FindingSummary f : s.getFindings()) {
@@ -236,42 +310,158 @@ public class MemoryFacade {
         return sb.toString();
     }
 
-    private synchronized void updateSessionIndex(String newRunId) {
+    private synchronized void updateSessionIndexInMemorySdk(String newRunId) {
         if (!memoryIndex.contains(newRunId)) {
             memoryIndex.add(newRunId);
         }
         List<String> index = new ArrayList<>(memoryIndex);
         try {
             String json = objectMapper.writeValueAsString(index);
-            memorySdk.store(INDEX_KEY, json);
+            memorySdk.store(AUDIT_INDEX_KEY, json);
+            memorySdk.store(LEGACY_INDEX_KEY, json);
         } catch (Exception ignored) {
         }
     }
 
     @SuppressWarnings("unchecked")
     private List<String> getSessionIndex() {
-        if (!memoryIndex.isEmpty()) {
-            return new ArrayList<>(memoryIndex);
-        }
+        // Query MemorySDK first
         try {
-            SDKResponse resp = memorySdk.recall(INDEX_KEY);
+            SDKResponse resp = memorySdk.recall(AUDIT_INDEX_KEY);
+            if (resp == null || resp.answer() == null || resp.answer().isBlank() || resp.answer().contains("not found")) {
+                resp = memorySdk.recall(LEGACY_INDEX_KEY);
+            }
             if (resp != null && resp.answer() != null && !resp.answer().isBlank() && !resp.answer().contains("not found")) {
-                List<String> recalled = objectMapper.readValue(resp.answer(), List.class);
-                if (recalled != null) {
-                    for (String id : recalled) {
-                        if (!memoryIndex.contains(id)) {
-                            memoryIndex.add(id);
+                try {
+                    List<String> recalled = objectMapper.readValue(resp.answer(), List.class);
+                    if (recalled != null && !recalled.isEmpty()) {
+                        for (String id : recalled) {
+                            if (!memoryIndex.contains(id)) {
+                                memoryIndex.add(id);
+                            }
                         }
+                        return new ArrayList<>(memoryIndex);
                     }
-                    return new ArrayList<>(memoryIndex);
+                } catch (Exception ignored) {
                 }
             }
         } catch (Exception ignored) {
         }
+
+        if (!memoryIndex.isEmpty()) {
+            return new ArrayList<>(memoryIndex);
+        }
+
+        // Fallback to disk ledger cache
+        loadLedgerFromDisk();
         return new ArrayList<>(memoryIndex);
     }
 
-    // ─── Metadata DTOs ─────────────────────────────────────────────────────────
+    /**
+     * Hydrates local in-memory cache from durable workspace ledger.
+     * Guardrail: Never overwrites MemorySDK during hydration.
+     */
+    private synchronized void loadLedgerFromDisk() {
+        if (workspaceHistoryPath == null || !Files.exists(workspaceHistoryPath)) {
+            return;
+        }
+        try {
+            String content = Files.readString(workspaceHistoryPath);
+            if (content == null || content.isBlank()) {
+                return;
+            }
+            WorkspaceHistoryLedger ledger = objectMapper.readValue(content, WorkspaceHistoryLedger.class);
+            if (ledger != null && ledger.getSessions() != null) {
+                for (AuditSessionMetadata s : ledger.getSessions()) {
+                    if (s != null && s.getRunId() != null) {
+                        fastSessionCache.putIfAbsent(s.getRunId(), s);
+                        if (!memoryIndex.contains(s.getRunId())) {
+                            memoryIndex.add(s.getRunId());
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            // Note: workspace ledger read fallback
+        }
+    }
+
+    /**
+     * Persists current session metadata into versioned workspace ledger file.
+     */
+    private synchronized void persistLedgerToDisk() {
+        if (workspaceHistoryPath == null) {
+            return;
+        }
+        try {
+            // Gather all cached sessions
+            List<AuditSessionMetadata> sessions = new ArrayList<>();
+            for (String id : memoryIndex) {
+                AuditSessionMetadata s = fastSessionCache.get(id);
+                if (s != null && !sessions.contains(s)) {
+                    sessions.add(s);
+                }
+            }
+
+            WorkspaceHistoryLedger ledger = new WorkspaceHistoryLedger(
+                    CURRENT_SCHEMA_VERSION,
+                    workspaceId,
+                    sessions
+            );
+
+            String json = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(ledger);
+            Path parent = workspaceHistoryPath.getParent();
+            if (parent != null && !Files.exists(parent)) {
+                Files.createDirectories(parent);
+            }
+            Files.writeString(workspaceHistoryPath, json);
+        } catch (Exception e) {
+            System.err.println("[SentinelPR:MemoryFacade] Note: Could not persist workspace history ledger: " + e.getMessage());
+        }
+    }
+
+    public synchronized void clearCache() {
+        fastSessionCache.clear();
+        memoryIndex.clear();
+    }
+
+    public Path getWorkspaceHistoryPath() {
+        return workspaceHistoryPath;
+    }
+
+    public String getWorkspaceId() {
+        return workspaceId;
+    }
+
+    // ─── Versioned Ledger Schema & Metadata DTOs ───────────────────────────────
+
+    /**
+     * Versioned schema container for workspace audit history ledger (.sentinelhistory.json).
+     */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class WorkspaceHistoryLedger {
+        private String schemaVersion = CURRENT_SCHEMA_VERSION;
+        private String workspaceId;
+        private List<AuditSessionMetadata> sessions = new ArrayList<>();
+
+        public WorkspaceHistoryLedger() {
+        }
+
+        public WorkspaceHistoryLedger(String schemaVersion, String workspaceId, List<AuditSessionMetadata> sessions) {
+            this.schemaVersion = schemaVersion;
+            this.workspaceId = workspaceId;
+            this.sessions = sessions != null ? sessions : new ArrayList<>();
+        }
+
+        public String getSchemaVersion() { return schemaVersion; }
+        public void setSchemaVersion(String schemaVersion) { this.schemaVersion = schemaVersion; }
+
+        public String getWorkspaceId() { return workspaceId; }
+        public void setWorkspaceId(String workspaceId) { this.workspaceId = workspaceId; }
+
+        public List<AuditSessionMetadata> getSessions() { return sessions; }
+        public void setSessions(List<AuditSessionMetadata> sessions) { this.sessions = sessions; }
+    }
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public static class AuditSessionMetadata {

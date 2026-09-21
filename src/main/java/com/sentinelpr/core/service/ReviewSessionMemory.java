@@ -102,6 +102,13 @@ public class ReviewSessionMemory {
         fastSessionCache.put(fingerprint, report);
 
         try {
+            // 1. Record structured session metadata into MemoryFacade (strictly metadata)
+            if (client != null && client.memoryFacade() != null) {
+                client.memoryFacade().recordSession(report, null, 0L);
+            }
+
+            // 2. Persist audit session into MemorySDK under AUDIT: namespace
+            String runId = report.getReportId() != null ? report.getReportId() : "REV-" + System.currentTimeMillis();
             String title = "AUDIT:" + fingerprint;
             String content = String.format(
                     "Target: %s | Violations: %d | Status: %s | ScannedAt: %s",
@@ -112,6 +119,7 @@ public class ReviewSessionMemory {
             );
 
             memorySdk.store(title, content);
+            memorySdk.store("AUDIT:" + runId, content);
             System.out.println("[SentinelPR:Memory] Recorded audit session into Memory Kernel for " + fingerprint.substring(0, Math.min(12, fingerprint.length())));
         } catch (Exception e) {
             System.out.println("[SentinelPR:Memory] Note: Memory kernel persistence: " + e.getMessage());

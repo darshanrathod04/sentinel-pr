@@ -1,0 +1,37 @@
+{
+  "version" : "1.0",
+  "createdAt" : 1789964995.470209500,
+  "targetPath" : "src\\test\\java\\com\\sentinelpr\\fixture\\VulnerableService.java",
+  "totalEntries" : 3,
+  "entries" : [ {
+    "fingerprint" : "9c756cf6fa3798c3de329dc0c78f9608",
+    "filePath" : "src/test/java/com/sentinelpr/fixture/VulnerableService.java",
+    "ruleId" : "SEC-001-FAIL-OPEN",
+    "startLine" : 36,
+    "endLine" : 39,
+    "className" : "VulnerableService",
+    "methodName" : "checkUserAuthorization",
+    "snippet" : "catch (NullPointerException e) {\r\n    // VULNERABLE: Fail-open security block returns true on error\r\n    return true;\r\n}",
+    "capturedAt" : 1789964995.467433500
+  }, {
+    "fingerprint" : "4a95ea45aa3b7ff1f23218ecb7da9884",
+    "filePath" : "src/test/java/com/sentinelpr/fixture/VulnerableService.java",
+    "ruleId" : "SEC-002-UNCLOSED-STREAM",
+    "startLine" : 21,
+    "endLine" : 21,
+    "className" : "VulnerableService",
+    "methodName" : "readConfigurationData",
+    "snippet" : "new FileInputStream(configFile)",
+    "capturedAt" : 1789964995.468814500
+  }, {
+    "fingerprint" : "722bd25d0fce0c6183a6521fc8721119",
+    "filePath" : "src/test/java/com/sentinelpr/fixture/VulnerableService.java",
+    "ruleId" : "SEC-003-VOLATILE-COMPOUND",
+    "startLine" : 46,
+    "endLine" : 46,
+    "className" : "VulnerableService",
+    "methodName" : "trackRequest",
+    "snippet" : "requestCount++",
+    "capturedAt" : 1789964995.468814500
+  } ]
+}

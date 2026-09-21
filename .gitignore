@@ -1,0 +1,26 @@
+# ── Build output ─────────────────────────────────────────────────────
+target/
+
+# ── Release engineering output (scripts/build-release.ps1) ───────────
+release/
+SHA256SUMS.txt
+
+# ── Secrets / local configuration ────────────────────────────────────
+.env
+
+# ── IDE / editor noise ───────────────────────────────────────────────
+.idea/
+*.iml
+.vscode/
+.classpath
+.project
+.settings/
+
+# ── SentinelPR local workspace artifacts ─────────────────────────────
+.sentinelhistory.json
+.sentinelignore
+compliance-audit.log
+
+# ── OS noise ─────────────────────────────────────────────────────────
+Thumbs.db
+.DS_Store

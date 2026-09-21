@@ -27,6 +27,7 @@ import com.sentinelpr.core.analysis.DataflowTracker;
 import com.sentinelpr.core.analysis.taint.TaintFlow;
 import com.sentinelpr.core.governance.policy.PolicyEvaluationResult;
 import com.sentinelpr.core.model.UnifiedDiffPatch;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -108,6 +109,22 @@ class SentinelPrP4IntelligenceVerificationTest {
         assertTrue(Files.exists(cyclicBPath), "Fixture must exist: " + cyclicBPath);
         assertTrue(Files.exists(interDataServicePath), "Fixture must exist: " + interDataServicePath);
         assertTrue(Files.exists(interControllerPath), "Fixture must exist: " + interControllerPath);
+
+        try {
+            Files.deleteIfExists(Path.of(MemoryFacade.DEFAULT_HISTORY_FILE));
+        } catch (Exception ignored) {
+        }
+    }
+
+    @AfterEach
+    void tearDown() {
+        try {
+            Files.deleteIfExists(Path.of(MemoryFacade.DEFAULT_HISTORY_FILE));
+            if (client != null && client.memoryFacade() != null) {
+                client.memoryFacade().clearCache();
+            }
+        } catch (Exception ignored) {
+        }
     }
 
     @Test
@@ -504,5 +521,101 @@ class SentinelPrP4IntelligenceVerificationTest {
 
         int runDetailExitCode = runner.execute(new String[]{"--run", runId});
         assertEquals(0, runDetailExitCode, "CLI --run <runId> must exit with code 0");
+    }
+
+    @Test
+    @DisplayName("P2 Regression: Memory history persists across audit #1, audit #2, and CLI --history in reverse chronological order")
+    void testMemoryHistoryPersistsAcrossAudit1Audit2AndCliHistory() throws Exception {
+        Path historyFile = Path.of(MemoryFacade.DEFAULT_HISTORY_FILE);
+        Files.deleteIfExists(historyFile);
+
+        try {
+            // 1. Run Audit #1 on vulnerableServicePath
+            SentinelCliRunner runner1 = new SentinelCliRunner();
+            SentinelCliRunner.CliExecutionResult res1 = runner1.execute(
+                    vulnerableServicePath, null, null, null, null, null, null, "json"
+            );
+            assertNotNull(res1, "Audit #1 result must not be null");
+            assertNotNull(res1.getReport(), "Audit #1 report must not be null");
+            String runId1 = res1.getReport().getReportId();
+            assertNotNull(runId1, "Audit #1 runId must not be null");
+
+            // Small delay to ensure strictly distinct timestamps
+            Thread.sleep(50);
+
+            // 2. Run Audit #2 on enterpriseVulnerablePath
+            SentinelCliRunner runner2 = new SentinelCliRunner();
+            SentinelCliRunner.CliExecutionResult res2 = runner2.execute(
+                    enterpriseVulnerablePath, null, null, null, null, null, null, "json"
+            );
+            assertNotNull(res2, "Audit #2 result must not be null");
+            assertNotNull(res2.getReport(), "Audit #2 report must not be null");
+            String runId2 = res2.getReport().getReportId();
+            assertNotNull(runId2, "Audit #2 runId must not be null");
+            assertNotEquals(runId1, runId2, "Audit #1 and Audit #2 must have distinct runIds");
+
+            // 3. In a fresh CLI runner instance (simulating separate CLI invocation), execute --history
+            SentinelCliRunner historyRunner = new SentinelCliRunner();
+            java.io.ByteArrayOutputStream outCapture = new java.io.ByteArrayOutputStream();
+            java.io.PrintStream origOut = System.out;
+            System.setOut(new java.io.PrintStream(outCapture));
+            int exitCode;
+            try {
+                exitCode = historyRunner.execute(new String[]{"--history"});
+            } finally {
+                System.setOut(origOut);
+            }
+
+            assertEquals(0, exitCode, "CLI --history must exit with code 0");
+            String historyOutput = outCapture.toString();
+
+            // 4. Verify both runIds exist in output
+            assertTrue(historyOutput.contains(runId1), "History table must contain runId1: " + runId1);
+            assertTrue(historyOutput.contains(runId2), "History table must contain runId2: " + runId2);
+            assertFalse(historyOutput.contains("No prior review sessions recorded"),
+                    "Must not display 'No prior review sessions recorded' after audits");
+
+            // 5. Verify reverse chronological order: runId2 (Audit #2) must appear before runId1 (Audit #1)
+            int idx2 = historyOutput.indexOf(runId2);
+            int idx1 = historyOutput.indexOf(runId1);
+            assertTrue(idx2 >= 0 && idx1 >= 0, "Both runIds must be present in history table");
+            assertTrue(idx2 < idx1, String.format("Audit #2 (newer: %s at pos %d) must appear before Audit #1 (older: %s at pos %d)",
+                    runId2, idx2, runId1, idx1));
+
+            // 6. Verify programmatic readHistory() returns both in reverse chronological order
+            List<MemoryFacade.AuditSessionMetadata> historyList = historyRunner.getMemoryFacade().readHistory();
+            assertTrue(historyList.size() >= 2, "readHistory() must return at least 2 sessions");
+            assertEquals(runId2, historyList.get(0).getRunId(), "First element must be runId2 (Audit #2, newer)");
+            assertEquals(runId1, historyList.get(1).getRunId(), "Second element must be runId1 (Audit #1, older)");
+
+            // 7. Verify ledger schema versioning & workspaceId
+            assertTrue(Files.exists(historyFile), ".sentinelhistory.json must exist in workspace");
+            String ledgerJson = Files.readString(historyFile);
+            assertTrue(ledgerJson.contains("\"schemaVersion\" : \"1.0.0\""), "Ledger must contain schemaVersion 1.0.0");
+            assertTrue(ledgerJson.contains("\"workspaceId\""), "Ledger must contain workspaceId");
+            assertTrue(ledgerJson.contains("\"sessions\""), "Ledger must contain sessions array");
+
+            // Strict governance: only metadata, never raw source code, diffs, or patch bodies
+            assertFalse(ledgerJson.contains("public class VulnerableService"), "Ledger must never persist raw source code");
+            assertFalse(ledgerJson.contains("public class EnterpriseSecurityVulnerableService"), "Ledger must never persist raw source code");
+            assertFalse(ledgerJson.contains("--- a/"), "Ledger must never persist patch diffs");
+            assertFalse(ledgerJson.contains("+++ b/"), "Ledger must never persist patch diffs");
+
+            // 8. Verify --run <runId> inspection on Audit #2
+            outCapture.reset();
+            System.setOut(new java.io.PrintStream(outCapture));
+            try {
+                int runExit = historyRunner.execute(new String[]{"--run", runId2});
+                assertEquals(0, runExit, "CLI --run <runId> must exit with code 0");
+            } finally {
+                System.setOut(origOut);
+            }
+            String detailOutput = outCapture.toString();
+            assertTrue(detailOutput.contains(runId2), "Detail output must contain runId2");
+            assertTrue(detailOutput.contains("Target Path:"), "Detail output must contain Target Path");
+            assertTrue(detailOutput.contains("Duration:"), "Detail output must display duration");
+        } finally {
+            Files.deleteIfExists(historyFile);
+        }
     }
 }

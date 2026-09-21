@@ -1,345 +1,345 @@
-# SentinelPR — Autonomous Enterprise Code & Security Review Copilot
+# SentinelPR — Enterprise Code & Security Review Copilot
 
 [![Java 21 LTS](https://img.shields.io/badge/Java-21%20LTS-orange.svg)](https://www.oracle.com/java/technologies/downloads/#java21)
 [![Spring Boot 4.0.2](https://img.shields.io/badge/Spring%20Boot-4.0.2-brightgreen.svg)](https://spring.io/projects/spring-boot)
 [![Shree AI OS](https://img.shields.io/badge/Shree%20AI%20OS-1.0.6--developer--preview-blue.svg)](https://github.com/darshanrathod04/shree-ai-os)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Tests](https://img.shields.io/badge/tests-36%20passing-success.svg)](#verification)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](docs/LICENSE-RECOMMENDATION.md)
 
-**SentinelPR** is an autonomous enterprise code and security review copilot engineered on top of the **Shree AI OS** cognitive operating system platform (`io.github.darshanrathod04:shree-ai-os:1.0.6-developer-preview`).
+**SentinelPR v1.0.0** is an enterprise code and security review copilot for Java codebases, built on top of the **Shree AI OS** cognitive operating system platform (`io.github.darshanrathod04:shree-ai-os:1.0.6-developer-preview`).
 
-SentinelPR audits Java codebases at pull request boundaries, identifying critical security and concurrency vulnerabilities through deterministic Abstract Syntax Tree (AST) parsing, cognitive causal reasoning, and verified patch synthesis in standard unified diff format.
+SentinelPR audits Java source at pull-request boundaries using deterministic AST analysis (JavaParser), intra-procedural taint tracking, causal root-cause reasoning, calibrated confidence scoring, and **verified** patch synthesis in standard unified diff format. Every audit can be governed by an enterprise policy, reconciled against an accepted technical-debt baseline, exported as OASIS SARIF v2.1.0 or a GitHub PR review payload, and recorded into a SHA-256-signed append-only audit ledger for SOC2 / ISO27001 evidence.
 
 ---
 
 ## Table of Contents
 
-- [Overview](#overview)
-- [Architecture & Shree AI OS SDK Integration](#architecture--shree-ai-os-sdk-integration)
-- [Key Features](#key-features)
-- [Prerequisites](#prerequisites)
-- [Quickstart](#quickstart)
-  - [1. Run Automated Test Suite](#1-run-automated-test-suite)
-  - [2. Execute CLI Audit](#2-execute-cli-audit)
-  - [3. Start REST API Server](#3-start-rest-api-server)
-- [Supported Security Rules](#supported-security-rules)
-- [Project Structure](#project-structure)
-- [Configuration](#configuration)
+- [Features](#features)
+- [Architecture](#architecture)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Gemini BYOK Setup](#gemini-byok-setup)
+- [CLI Commands](#cli-commands)
+- [Example Audit](#example-audit)
+- [Example AI Chat](#example-ai-chat)
+- [REST API](#rest-api)
+- [Supported Rules](#supported-rules)
+- [Verification](#verification)
+- [Screenshots](#screenshots)
+- [Documentation](#documentation)
+- [Contributing](#contributing)
+- [License](#license)
 
 ---
 
-## Overview
+## Features
 
-Traditional static analysis tools rely on rigid regex rules or generate overwhelming false positives without remediation paths. SentinelPR bridges static code inspection and cognitive AI agents by combining:
-
-1. **AST Semantic Inspection**: Deep AST parsing using [JavaParser](https://javaparser.org/) integrated with Shree AI OS [`ProjectSDK`](#projectsdk-ast-parsing--symbol-extraction).
-2. **Causal Vulnerability Reasoning**: Exploitability analysis and causal verification powered by [`ReasoningSDK`](#reasoningsdk-causal-security-rule-evaluation).
-3. **Verified Patch Synthesis**: Autonomous code refactoring with AST compilation check verification powered by [`DeveloperSDK`](#developersdk-unified-diff-patch-synthesis).
-4. **Content-Addressable Audit Memory**: Zero-redundancy session caching via [`MemorySDK`](#memorysdk-audit-fingerprinting--deduplication).
-
-SentinelPR operates either as an embedded CLI utility in CI/CD pipelines (GitHub Actions, GitLab CI) or as a centralized microservice exposing high-throughput REST APIs.
+| Capability | Description |
+|---|---|
+| **AST security & architecture audit** | 13 rules (10 security + 3 architectural) evaluated on JavaParser ASTs at Java 21 language level |
+| **Intra-procedural taint tracking** | `DataflowTracker` follows untrusted sources → sinks (SQL, command exec, file I/O) with sanitizer awareness |
+| **False-positive suppression** | `@SuppressWarnings("sentinel:<RULE>")`, inline `// sentinel-ignore` comments, and `.sentinelignore` files |
+| **Incremental PR diff filtering** | Only findings intersecting unified-diff hunk line ranges block the PR; the rest become diff-baseline debt |
+| **Technical-debt baselines** | SHA-256 fingerprinted `.sentinelbaseline.json` snapshots with structural re-matching (±5 lines / same method) |
+| **Enterprise policy engine** | Severity thresholds, blocked-rule supremacy (blocked rules cannot be hidden by baseline debt), unverified-patch gates |
+| **Causal reasoning** | Multi-hop `Trigger → Propagation → Exploit Scenario → Business Impact` chains with blast-radius classification |
+| **Calibrated confidence** | Deterministic 4-factor scoring (taint 0.35 / AST precision 0.30 / sanitizer absence 0.20 / reachability 0.15); findings below 0.70 are demoted, not blocking |
+| **Verified patch synthesis** | One composed unified diff per file; every patch re-parsed and re-audited until **0 critical findings remain** |
+| **SARIF v2.1.0 export** | GitHub Code Scanning / GitLab SAST / SonarQube compatible reports |
+| **GitHub PR review payload** | `POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews` body with inline comments and ```suggestion``` blocks |
+| **Cryptographic audit trail** | Append-only NDJSON ledger with SHA-256 report signatures for SOC2-CC7.1 / ISO27001-A.12.6.1 |
+| **Session memory & history** | Shree AI OS Memory Kernel plus a durable `.sentinelhistory.json` workspace ledger (metadata only — never source code) |
+| **AI assistant chat** | `--chat` command routed through the Shree AI OS LLM router with Google Gemini BYOK |
+| **REST API** | Spring Boot service exposing audit, SARIF, GitHub, policy, and governance endpoints |
 
 ---
 
-## Architecture & Shree AI OS SDK Integration
+## Architecture
 
-SentinelPR leverages the 10-SDK cognitive kernel surface provided by **Shree AI OS**:
+SentinelPR is a Spring Boot application that runs both as an embedded CLI (`com.sentinelpr.cli.SentinelCliRunner`) and as a REST service (`/api/v1/sentinel/*`). Both front-ends share the same pipeline orchestrated by `SentinelAuditOrchestrator`:
 
 ```
-+-----------------------------------------------------------------------------------+
-|                               SentinelPR Copilot                                  |
-|   (CLI Runner: SentinelCliRunner  |  REST API: /api/v1/sentinel/review)          |
-+-----------------------------------------------------------------------------------+
-                                         |
-                                         v
-                         +-------------------------------+
-                         |   SentinelAuditOrchestrator   |
-                         +-------------------------------+
-                           /       |           |        \
-                          /        |           |         \
-                         v         v           v          v
-              +------------+ +-----------+ +-----------+ +---------------+
-              | Code       | | Review    | | Rule      | | Automated     |
-              | Inspection | | Session   | | Evaluation| | Patch         |
-              | Service    | | Memory    | | Service   | | Service       |
-              +------------+ +-----------+ +-----------+ +---------------+
-                    |              |             |               |
-+-------------------|--------------|-------------|---------------|------------------+
-| SHREE AI OS       v              v             v               v                  |
-| 10-SDK SURFACE:                                                                   |
-|              +------------+ +-----------+ +-----------+ +---------------+         |
-|              | ProjectSDK | | MemorySDK | |Reasoning- | | DeveloperSDK  |         |
-|              | (AST &     | | (SHA-256  | | SDK       | | (Patch Applier|         |
-|              | Symbols)   | | Cache)    | | (Causal)  | | & Diff Engine)|         |
-|              +------------+ +-----------+ +-----------+ +---------------+         |
-|                                                                                   |
-|  IdentitySDK  *  KnowledgeSDK  *  PlanningSDK  *  ExecutionSDK  *  ReflectionSDK  |
-|  DiagnosticsSDK  *  SettingsSDK (BYOK Gemini Provider / In-Memory Fallback)       |
-+-----------------------------------------------------------------------------------+
+CLI / REST
+    │
+    ▼
+SentinelAuditOrchestrator
+    ├─ CodeInspectionService      (AST parse via ProjectFacade / JavaParser)
+    ├─ RuleEvaluationService      (ReasoningFacade rules + ArchitectureReviewEngine)
+    ├─ SuppressionManager         (annotations / inline comments / .sentinelignore)
+    ├─ IncrementalDiffScanner     (PR hunk filtering)
+    ├─ BaselineManager            (technical-debt reconciliation)
+    ├─ CausalAnalysisEngine       (root-cause chains)
+    ├─ ConfidenceCalibrator       (4-factor calibrated scoring)
+    ├─ AutomatedPatchService      (PatchComposer → PatchVerifier)
+    └─ ReviewSessionMemory        (fingerprint dedup via MemorySDK)
+    │
+    ▼
+Exports: JSON · SARIF 2.1.0 · GitHub PR payload · NDJSON audit ledger
 ```
 
-### SDK Integration Map
-
-| Shree AI OS SDK | SentinelPR Facade / Service | Cognitive Responsibility |
-|---|---|---|
-| **`ProjectSDK`** | `ProjectFacade`<br>`CodeInspectionService` | Structural AST parsing, `CompilationUnit` analysis, class and method symbol extraction, token stream analysis, and recursive directory scanning. |
-| **`ReasoningSDK`** | `ReasoningFacade`<br>`RuleEvaluationService` | Causal vulnerability modeling via `DefaultCausalReasoningEngine`, evaluating fail-open security bypasses, stream leaks, volatile race conditions, and un-isolated execution paths. |
-| **`DeveloperSDK`** | `DeveloperFacade`<br>`AutomatedPatchService` | Automated patch synthesis, `DefaultPatchExecutionEngine`, AST syntax validation against Java 21 LTS language rules, and standard unified diff generation (`--- a/` / `+++ b/`). |
-| **`MemorySDK`** | `ReviewSessionMemory` | Content-addressable SHA-256 fingerprinting and session deduplication, preventing expensive re-audits on unchanged source files. |
-| **`SettingsSDK`** | `SentinelClient` | Bring-Your-Own-Key (BYOK) dynamic provider routing (e.g. Google Gemini via `GEMINI_API_KEY`) with deterministic local in-memory fallback. |
-| **`DiagnosticsSDK`** | `SentinelClient` / Health API | Runtime health monitoring, provider latency checks, and platform telemetry. |
+All LLM capabilities (chat, reasoning) are delegated to the **Shree AI OS** 10-SDK surface (`ShreeAI`, `ProjectSDK`, `MemorySDK`, `SettingsSDK`, …). SentinelPR never calls Gemini APIs directly. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for Mermaid diagrams of the CLI flow, audit pipeline, patch verification, governance engine, memory subsystem, and LLM routing.
 
 ---
 
-## Key Features
+## Installation
 
-- **Intra-Procedural Taint & Dataflow Engine (`DataflowTracker`)**: Traces untrusted sources (parameters, HTTP inputs) through assignments, method invocations, and returns to sensitive sinks (ProcessBuilder, Runtime.exec, FileInputStream, raw SQL), tracking sanitization guards.
-- **False Positive Suppression Engine (`SuppressionManager`)**: Granular policy suppression via `@SuppressWarnings("sentinel:<RULE_ID>")`, inline comments (`// sentinel-ignore <RULE_ID> [reason]`), and repository `.sentinelignore` files, recorded in reports as `suppressedFindings`.
-- **Incremental PR Diff Range Filtering (`IncrementalDiffScanner`)**: Parses unified diff hunk intervals (`@@ -l,s +l,s @@`) to restrict PR blockages strictly to lines added or modified in the pull request, classifying legacy defects outside the diff hunks as baseline (`DIFF_BASELINE`).
-- **OASIS SARIF v2.1.0 Report Exporter (`SarifReportGenerator`)**: Produces schema-compliant SARIF 2.1.0 JSON documents (`https://json.schemastore.org/sarif-2.1.0.json`) with comprehensive rules catalog (`SEC-001` through `SEC-010`), line regions, and verified patch properties for GitHub Code Scanning and GitLab SAST.
-- **Structured GitHub PR Review Synthesis (`PrReviewCommentBuilder`)**: Synthesizes GitHub Pull Request Review API payloads with inline comment alerts (`> [!CAUTION]`, `> [!WARNING]`), collapsible ````suggestion```` unified diff blocks, and an executive markdown summary table.
-- **Deep Root-Cause Causal Reasoning (`CausalAnalysisEngine` & `CausalChain`)**: Synthesizes multi-hop causal chains (`Trigger -> Propagation -> Exploit Scenario -> Business Impact`), estimates blast radius (`LOCAL_METHOD`, `SERVICE_COMPONENT`, `TENANT_DATA`, `SYSTEM_WIDE`), and verifies caller reachability via public controllers.
-- **Calibrated Confidence & Exploitability Scoring (`ConfidenceCalibrator` & `ExploitabilityIndex`)**: Deterministic 4-factor scoring model ($0.35$ taint continuity, $0.30$ AST precision, $0.20$ absence of sanitizers, $0.15$ reachability) assigning exploitability indices (`VERY_LOW` through `CRITICAL`) and auto-suppressing unverified heuristics ($< 0.70$).
-- **Multi-File Coordinated Fix Planner (`MultiFileFixPlanner` & `CoordinatedPatchPlan`)**: Cross-boundary refactoring across coupled providers and consumers (e.g. `CoupledService` $\to$ `CoupledController`), wrapping Shree AI OS `PatchPlan` with simultaneous multi-file AST validation.
-- **Architectural Hygiene & Anti-Pattern Review (`ArchitectureReviewEngine`)**: Evaluates architectural design flaws including cyclic dependencies (`ARCH-001`), leaky entity abstractions in REST endpoints (`ARCH-002`), and non-deterministic clock/random invocations in business services (`ARCH-003`).
-- **Atomic Patch Composition (`PatchComposer`)**: Sequentially applies all verified AST transformations in-memory to generate ONE non-conflicting unified diff per file.
-- **Post-Patch Regression Verification (`PatchVerifier`)**: Re-parses patched code with `JavaAstParser` and re-evaluates all security rules to guarantee 0 critical vulnerabilities remain, setting `regressionVerified: true`.
-- **Baseline Technical Debt Engine (`BaselineManager`)**: Captures repository debt snapshots into `.sentinelbaseline.json`, fingerprinting findings by SHA-256 or structural proximity to suppress legacy defects as `BASELINE_ACCEPTED` while blocking net-new defects.
-- **Enterprise Policy Enforcement Engine (`PolicyEngine`)**: Configurable compliance thresholds (`maxAllowedCritical`, `maxAllowedHigh`, `maxAllowedMedium`), strictly blocked rules, and unverified patch guards with deterministic exit codes (`0`: Pass, `1`: Breached, `2`: Error).
-- **Cryptographic Audit Trail & Compliance Logging (`AuditTrailLogger`)**: Generates append-only NDJSON audit ledger entries for SOC2-CC7.1 and ISO27001 compliance with UTC ISO-8601 timestamps, operator identity, input SHA-256 fingerprint, and verifiable report integrity signatures.
-- **Multi-Modal Audit Intake**: Accepts either filesystem paths (individual files or whole directories) or raw source code strings over HTTP.
-- **Java 21 LTS Compliant**: Native support for modern Java 21 language constructs (virtual threads, pattern matching, record patterns).
-- **High Concurrency & In-Memory Deduplication**: Thread-safe content-addressable SHA-256 session memory via Shree AI OS `MemorySDK`.
+### Prerequisites
 
----
+| Requirement | Version |
+|---|---|
+| JDK | 21 LTS |
+| Maven | 3.9+ |
+| Google Gemini API key | optional (BYOK) |
 
-## Prerequisites
+### Build
 
-- **Java Development Kit (JDK)**: Java 21 LTS or newer (Oracle JDK, Eclipse Temurin, or OpenJDK).
-- **Build Tool**: Apache Maven 3.9.0 or higher.
-- **Operating System**: Linux, macOS, or Windows.
-- *(Optional)* **Google Gemini API Key**: Set `GEMINI_API_KEY` to enable advanced reasoning via Gemini models (`gemini-3.6-flash`). If not set, SentinelPR automatically operates in deterministic local in-memory provider mode.
-
-Verify your environment:
 ```bash
-java -version
-mvn -version
+git clone https://github.com/darshanrathod04/sentinel-pr.git
+cd sentinel-pr
+mvn clean install -DskipTests
+```
+
+### Run tests
+
+```bash
+mvn test
 ```
 
 ---
 
-## Quickstart
+## Quick Start
 
-### 1. Run Automated Test Suite
-
-SentinelPR includes comprehensive unit and integration tests validating rule evaluation, patch synthesis, AST verification, diff filtering, SARIF compliance, baseline management, enterprise policy enforcement, and cryptographic audit logging:
+Audit a file or directory with the CLI:
 
 ```bash
-mvn clean test
+mvn -q compile exec:java \
+  "-Dexec.mainClass=com.sentinelpr.cli.SentinelCliRunner" \
+  "-Dexec.args=src/main/java/com/sentinelpr"
 ```
 
-Expected output:
-```text
-[INFO] Running com.sentinelpr.SentinelPrApplicationTest
-[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0
-[INFO] Running com.sentinelpr.SentinelPrP0VerificationTest
-[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0
-[INFO] Running com.sentinelpr.SentinelPrP1SecurityVerificationTest
-[INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0
-[INFO] Running com.sentinelpr.SentinelPrP2WorkflowVerificationTest
-[INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0
-[INFO] Running com.sentinelpr.SentinelPrP3GovernanceVerificationTest
-[INFO] Tests run: 6, Failures: 0, Errors: 0, Skipped: 0
-[INFO] Running com.sentinelpr.SentinelPrP4IntelligenceVerificationTest
-[INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0
-[INFO] BUILD SUCCESS (28 tests passed, 0 failures)
-```
+Or with the full governance suite:
 
-### 2. Execute CLI Audit
-
-Audit any Java source file or project tree directly using the CLI runner:
-
-#### Standard CLI Scan:
 ```bash
-java -jar target/sentinel-pr-1.0.0.jar src/test/java/com/sentinelpr/fixture/VulnerableService.java
+mvn -q compile exec:java \
+  "-Dexec.mainClass=com.sentinelpr.cli.SentinelCliRunner" \
+  "-Dexec.args=target/src Vulnerable.java --baseline local-baseline.json --policy strict-policy.json --sarif report.sarif --audit-log compliance-audit.log -f github"
 ```
 
-#### Enterprise Governance Audit with Baseline, Policy, SARIF & Audit Log:
-```bash
-java -jar target/sentinel-pr-1.0.0.jar src/test/java/com/sentinelpr/fixture/VulnerableService.java \
-  --baseline .sentinelbaseline.json \
-  --policy src/test/resources/SamplePolicy.json \
-  --sarif target/sentinel-report.sarif \
-  --audit-log target/audit-ledger.log \
-  --format sarif
-```
-
-#### Capture New Baseline Snapshot:
-```bash
-java -jar target/sentinel-pr-1.0.0.jar src/test/java/com/sentinelpr/fixture/VulnerableService.java \
-  --create-baseline .sentinelbaseline.json
-```
-
-#### CLI Options:
-| Flag | Description | Default |
-|---|---|---|
-| `<target-path>` | Positional path to Java source file or directory | *(Required)* |
-| `--diff <patch-file>` | Unified diff file for incremental scanning | Full scan |
-| `--baseline <baseline-file>` | Technical debt snapshot file to filter accepted findings | None |
-| `--create-baseline <out.json>` | Export discovered findings as a new debt baseline snapshot | None |
-| `--policy <policy-file>` | Enforce enterprise compliance thresholds (exit code 1 on breach) | None |
-| `--sarif <output-file>` | Path to write OASIS SARIF v2.1.0 JSON report | None |
-| `--audit-log <ledger.log>` | Append signed cryptographic SOC2/ISO27001 audit entry | None |
-| `-f, --format <format>` | Output format on stdout (`json`, `sarif`, `github`, `text`) | `json` |
-
-### 3. Start REST API Server
-
-Start the SentinelPR Spring Boot microservice:
+Start the REST API server:
 
 ```bash
 mvn spring-boot:run
+# then: curl http://localhost:8080/api/v1/sentinel/health
 ```
 
-By default, the server binds to `http://localhost:8080`.
-
-#### Verify Health:
-```bash
-curl -s http://localhost:8080/api/v1/sentinel/health
-```
-
-Output:
-```json
-{
-  "service": "SentinelPR - Enterprise Code & Security Review Copilot",
-  "status": "UP",
-  "platform": "Shree AI OS (1.0.6-developer-preview)",
-  "rules": 10
-}
-```
-
-#### Standard Review Request:
-```bash
-curl -X POST http://localhost:8080/api/v1/sentinel/review \
-  -H "Content-Type: application/json" \
-  -d '{"targetPath": "src/test/java/com/sentinelpr/fixture/VulnerableService.java"}'
-```
-
-#### Incremental PR Review with SARIF Output:
-```bash
-curl -X POST http://localhost:8080/api/v1/sentinel/review/sarif \
-  -H "Content-Type: application/json" \
-  -d '{
-    "targetPath": "src/test/java/com/sentinelpr/fixture/VulnerableService.java",
-    "diffContent": "diff --git a/... b/...\n@@ -30,10 +30,11 @@\n..."
-  }'
-```
-
-#### GitHub PR Review Payload Endpoint:
-```bash
-curl -X POST http://localhost:8080/api/v1/sentinel/review/github \
-  -H "Content-Type: application/json" \
-  -d '{"targetPath": "src/test/java/com/sentinelpr/fixture/VulnerableService.java"}'
-```
-
-#### Enterprise Policy Evaluation Endpoint:
-```bash
-curl -X POST http://localhost:8080/api/v1/sentinel/policy/evaluate \
-  -H "Content-Type: application/json" \
-  -d '{
-    "targetPath": "src/test/java/com/sentinelpr/fixture/VulnerableService.java",
-    "policy": {
-      "policyName": "Strict-Gate",
-      "maxAllowedCritical": 0,
-      "maxAllowedHigh": 0,
-      "blockedRules": ["SEC-001-FAIL-OPEN"]
-    }
-  }'
-```
-
-#### Governance Engine Status & Standards:
-```bash
-curl -X GET http://localhost:8080/api/v1/sentinel/governance/status
-```
+Exit codes: `0` passed (or passed-with-baseline) · `1` policy breached · `2` internal error · `3` invalid arguments / missing target / missing chat prompt · `4` unverified patch failure.
 
 ---
 
-## Supported Security Rules
+## Gemini BYOK Setup
 
-| Rule ID | Severity | CWE | Vulnerability Description |
+SentinelPR uses **Bring Your Own Key** — you supply your own Google Gemini API key; it is configured through the Shree AI OS `SettingsSDK`, never hardcoded and never sent anywhere except the Gemini endpoint selected by the platform router.
+
+```bash
+# Linux / macOS
+export GEMINI_API_KEY="your-gemini-api-key"
+
+# Windows PowerShell
+$env:GEMINI_API_KEY = "your-gemini-api-key"
+```
+
+| Environment variable | Required | Default | Purpose |
 |---|---|---|---|
-| **`SEC-001-FAIL-OPEN`** | `CRITICAL` | [CWE-393](https://cwe.mitre.org/data/definitions/393.html) | Catch block catches exception (e.g. `NullPointerException`, `Exception`) and returns `true`, creating an unauthorized authentication/authorization bypass. |
-| **`SEC-002-UNCLOSED-STREAM`** | `HIGH` | [CWE-404](https://cwe.mitre.org/data/definitions/404.html) | File/Network stream (`FileInputStream`, etc.) instantiated without try-with-resources or deterministic closure, causing file descriptor leaks. |
-| **`SEC-003-VOLATILE-COMPOUND`** | `HIGH` | [CWE-362](https://cwe.mitre.org/data/definitions/362.html) | Non-atomic compound mutation (`counter++`, `counter--`, `counter += 1`) on `volatile` variable, leading to lost updates under concurrency. |
-| **`SEC-004-UNISOLATED-SUBPROCESS`** | `CRITICAL` | [CWE-78](https://cwe.mitre.org/data/definitions/78.html) | Un-isolated `Runtime.getRuntime().exec` without argument tokenization or execution constraints, exposing command injection risks. |
-| **`SEC-005-SQL-INJECTION`** | `CRITICAL` | [CWE-89](https://cwe.mitre.org/data/definitions/89.html) | Un-parameterized raw string concatenation or formatted strings passed into SQL execution sinks (Statement, EntityManager, JdbcTemplate). |
-| **`SEC-006-PATH-TRAVERSAL`** | `CRITICAL` | [CWE-22](https://cwe.mitre.org/data/definitions/22.html) | User input concatenated directly into File/Path instantiation without canonicalization, normalization (.normalize()), or containment validation. |
-| **`SEC-007-INSECURE-DESERIALIZATION`** | `CRITICAL` | [CWE-502](https://cwe.mitre.org/data/definitions/502.html) | Unvalidated `ObjectInputStream.readObject()` calls without custom filtering, LookAheadObjectInputStream, or ObjectInputFilter. |
-| **`SEC-008-HARDCODED-SECRET`** | `HIGH` | [CWE-798](https://cwe.mitre.org/data/definitions/798.html) | High-entropy secrets (Shannon entropy > 3.2), AWS access keys, private keys, or passwords embedded directly in source code. |
-| **`SEC-009-SPRING-SECURITY-CSRF-DISABLED`** | `HIGH` | [CWE-352](https://cwe.mitre.org/data/definitions/352.html) | SecurityFilterChain explicitly disables CSRF without configuring stateless session management (SessionCreationPolicy.STATELESS). |
-| **`SEC-010-SPRING-PERMISSIVE-CORS`** | `MEDIUM` | [CWE-942](https://cwe.mitre.org/data/definitions/942.html) | Permissive `@CrossOrigin(origins = "*")` or CorsConfiguration allowing arbitrary origins to access sensitive resources. |
-| **`ARCH-001-CYCLIC-DEPENDENCY`** | `HIGH` | [CWE-1047](https://cwe.mitre.org/data/definitions/1047.html) | Circular dependency cycle detected across components/packages, violating single responsibility and testability. |
-| **`ARCH-002-LEAKY-ABSTRACTION`** | `HIGH` | [CWE-1061](https://cwe.mitre.org/data/definitions/1061.html) | Internal database/JPA entities leaked directly across REST API controller boundaries instead of dedicated DTOs. |
-| **`ARCH-003-NON-DETERMINISTIC-CALL`** | `MEDIUM` | [CWE-676](https://cwe.mitre.org/data/definitions/676.html) | Direct System.currentTimeMillis() or Random instantiations in service layer impairing auditability and determinism. |
+| `GEMINI_API_KEY` | No | *(empty)* | Google Gemini BYOK key; when absent SentinelPR runs in deterministic in-memory provider mode |
+| `SHREE_API_KEY` | No | `local` | Shree AI OS platform bootstrap key (`SentinelClient.bootstrap`) |
 
-*For complete details, patch examples, and remediation rationale, see the [SentinelPR Usage Guide](USAGE_GUIDE.md).*
+Behavior (from `SentinelClient.bootstrap()`):
+
+- `GEMINI_API_KEY` set → `[SentinelPR] BYOK Gemini provider configured successfully.`
+- `GEMINI_API_KEY` missing → `[SentinelPR] No GEMINI_API_KEY provided; operating in deterministic in-memory provider mode.`
+- If provider configuration fails, SentinelPR automatically falls back to the in-memory provider chain — audits keep working deterministically.
+
+The `--chat` assistant and all reasoning pipelines route through the same LLM router; no API calls bypass the platform.
 
 ---
 
-## Project Structure
+## CLI Commands
 
+Usage: `java -jar sentinel-pr.jar <target-path> [options]` (or via Maven `exec:java`).
+
+| Option | Description |
+|---|---|
+| `<target-path>` | Java file or directory to audit |
+| `--diff <patch-file>` | Enable incremental git diff scanning |
+| `--baseline <baseline-file>` | Filter findings against a technical-debt baseline |
+| `--create-baseline <out.json>` | Export findings as a baseline snapshot |
+| `--policy <policy-file>` | Enforce enterprise compliance policy thresholds |
+| `--sarif <output-file>` | Export OASIS SARIF v2.1.0 report |
+| `--audit-log <ledger.log>` | Append a signed cryptographic audit entry |
+| `--history` | Display review session history from Memory Kernel |
+| `--run <run-id>` | Inspect detailed metadata for a specific session |
+| `--chat "<prompt>"` | Ask the SentinelPR AI assistant (Gemini BYOK) |
+| `-f, --format <format>` | Output format: `json` (default), `sarif`, `github`, `text` |
+
+Full reference with examples and expected output: [docs/CLI.md](docs/CLI.md).
+
+---
+
+## Example Audit
+
+```bash
+mvn -q compile exec:java \
+  "-Dexec.mainClass=com.sentinelpr.cli.SentinelCliRunner" \
+  "-Dexec.args=src/test/java/com/sentinelpr/fixture/VulnerableService.java"
 ```
-sentinel-pr/
-|-- pom.xml                                      # Maven build configuration & dependencies
-|-- README.md                                    # Project architecture and quickstart guide
-|-- USAGE_GUIDE.md                               # Rules catalog, CLI/API guide, and CI/CD workflow
-`-- src/
-    |-- main/
-    |   |-- java/com/sentinelpr/
-    |   |   |-- SentinelPrApplication.java       # Spring Boot main application & bean definitions
-    |   |   |-- api/
-    |   |   |   |-- SentinelReviewController.java# REST API endpoint (/api/v1/sentinel/review)
-    |   |   |   `-- dto/
-    |   |   |       `-- ReviewFileRequest.java   # Request payload DTO
-    |   |   |-- cli/
-    |   |   |   `-- SentinelCliRunner.java       # Command-line interface runner
-    |   |   |-- client/
-    |   |   |   |-- SentinelClient.java          # Shree AI OS singleton bootstrap & facade
-    |   |   |   |-- ProjectFacade.java           # AST parsing & symbol extraction facade
-    |   |   |   |-- ReasoningFacade.java         # Causal vulnerability evaluation facade
-    |   |   |   `-- DeveloperFacade.java         # Patch synthesis & diff generation facade
-    |   |   `-- core/
-    |   |       |-- model/
-    |   |       |   |-- InspectedSource.java     # Rich AST source graph model
-    |   |       |   |-- ReviewReport.java        # Structured audit report model
-    |   |       |   |-- SecurityFinding.java     # Finding violation model
-    |   |       |   |-- SecurityRule.java        # Security rules enumeration
-    |   |       |   |-- Severity.java            # Severity enum (CRITICAL, HIGH, MEDIUM, LOW)
-    |   |       |   `-- UnifiedDiffPatch.java    # Synthesized patch & diff model
-    |   |       `-- service/
-    |   |           |-- CodeInspectionService.java   # Source & directory inspection service
-    |   |           |-- RuleEvaluationService.java   # Rule evaluation dispatcher
-    |   |           |-- AutomatedPatchService.java   # Patch synthesis orchestrator
-    |   |           |-- ReviewSessionMemory.java     # SHA-256 fingerprint deduplication service
-    |   |           `-- SentinelAuditOrchestrator.java # End-to-end review pipeline orchestrator
-    |   `-- resources/
-    |       `-- application.properties           # Spring Boot application configuration
-    `-- test/
-        `-- java/com/sentinelpr/
-            |-- SentinelPrApplicationTest.java   # Integration test suite
-            `-- fixture/
-                `-- VulnerableService.java       # Test fixture with deliberate vulnerabilities
+
+Actual console output (trimmed):
+
+```text
+================================================================================
+ SentinelPR — Enterprise Code & Security Review Copilot
+ Powered by Shree AI OS (io.github.darshanrathod04:shree-ai-os:1.0.6-developer-preview)
+ Target: D:\projects\sentinel-pr\src\test\java\com\sentinelpr\fixture\VulnerableService.java
+================================================================================
+
+--- [Audit Execution Summary] ---
+Status:          SUCCESS
+Files Scanned:   1
+Vulnerabilities: 3
+Suppressed:      0
+Patches Created: 1
+Cached Session:  false
+Message:         Audit completed. Scanned 1 source file(s), identified 3 vulnerability finding(s) (0 suppressed), synthesized 1 verified patch(es).
+
+--- [Detected Vulnerabilities] ---
+  [CRITICAL] Fail-open security catch block grants access upon NullPointerException (…VulnerableService.java:36-39)
+    Rationale:   Catching an unhandled exception or null reference and returning true …
+    Remediation: Convert the handler to fail-closed semantics …
+  ...
+
+--- [Synthesized Verified Patches (Unified Diff)] ---
+  Patch for [SEC-003-VOLATILE-COMPOUND, SEC-002-UNCLOSED-STREAM, SEC-001-FAIL-OPEN]
+      -> Status: SUCCESS (Verified: true, RegressionVerified: true)
+--- a/src/test/java/com/sentinelpr/fixture/VulnerableService.java
++++ b/src/test/java/com/sentinelpr/fixture/VulnerableService.java
+@@ ...
 ```
 
 ---
 
-## Configuration
+## Example AI Chat
 
-SentinelPR can be configured via environment variables or `application.properties`:
+```bash
+mvn -q compile exec:java \
+  "-Dexec.mainClass=com.sentinelpr.cli.SentinelCliRunner" \
+  "-Dexec.args=--chat Explain why requestCount++ is unsafe in Java"
+```
 
-| Variable / Property | Default | Description |
+```text
+================================================
+ SentinelPR AI Assistant
+ Provider: Gemini (BYOK)
+================================================
+
+<model response…>
+```
+
+Everything after `--chat` becomes one prompt. Running `sentinel --chat` with no prompt prints `Error: Missing chat prompt.` with usage and exits with code `3`. *(Note: SDK runtime initialization logs emitted by Shree AI OS may also appear on the console; they originate in the platform, not the CLI.)*
+
+---
+
+## REST API
+
+Base path: `/api/v1/sentinel` (default port `8080`).
+
+| Endpoint | Method | Description |
 |---|---|---|
-| `server.port` | `8080` | Port for the Spring Boot REST API server. |
-| `SHREE_API_KEY` | `local` | Shree AI OS platform API key. |
-| `GEMINI_API_KEY` | *(empty)* | Optional Google Gemini BYOK API key for advanced cloud-assisted causal reasoning. |
-| `sentinel.copilot.default-rule-profile` | `enterprise-strict` | Active security rule evaluation profile. |
-#   s e n t i n e l - p r  
- 
+| `/health` | GET | Health check, rule counts, platform metadata |
+| `/review` | POST | Full audit (path, source code, or diff). Formats: `json` / `sarif` / `github` / `text` |
+| `/review/sarif` | POST | Audit returning SARIF v2.1.0 |
+| `/review/github` | POST | Audit returning a GitHub PR review payload |
+| `/policy/evaluate` | POST | Evaluate a report (or target path) against a policy |
+| `/governance/status` | GET | Active governance configuration and compliance standards |
+
+---
+
+## Supported Rules
+
+| Rule ID | Severity | Title |
+|---|---|---|
+| `SEC-001-FAIL-OPEN` | CRITICAL | Fail-open security block (CWE-393) |
+| `SEC-002-UNCLOSED-STREAM` | HIGH | Unclosed I/O stream (CWE-404) |
+| `SEC-003-VOLATILE-COMPOUND` | HIGH | Non-atomic volatile compound operation (CWE-362) |
+| `SEC-004-UNISOLATED-SUBPROCESS` | CRITICAL | Un-isolated subprocess call (CWE-78) |
+| `SEC-005-SQL-INJECTION` | CRITICAL | SQL injection (CWE-89) |
+| `SEC-006-PATH-TRAVERSAL` | CRITICAL | Path traversal (CWE-22) |
+| `SEC-007-INSECURE-DESERIALIZATION` | CRITICAL | Insecure deserialization (CWE-502) |
+| `SEC-008-HARDCODED-SECRET` | HIGH | Hardcoded secret or token (CWE-798) |
+| `SEC-009-SPRING-SECURITY-CSRF-DISABLED` | HIGH | Spring Security CSRF disabled (CWE-352) |
+| `SEC-010-SPRING-PERMISSIVE-CORS` | MEDIUM | Spring permissive CORS policy (CWE-942) |
+| `ARCH-001-CYCLIC-DEPENDENCY` | MEDIUM | Architectural cyclic dependency (CWE-1047) |
+| `ARCH-002-LEAKY-ABSTRACTION` | HIGH | Leaky entity abstraction in REST controller (CWE-497) |
+| `ARCH-003-NON-DETERMINISTIC-CALL` | MEDIUM | Non-deterministic time/random invocation |
+
+Full detection logic, vulnerable/fixed examples, and remediations: [docs/SECURITY.md](docs/SECURITY.md).
+
+---
+
+## Verification
+
+36 integration tests across six suites, all passing:
+
+```
+mvn test
+[INFO] Tests run: 36, Failures: 0, Errors: 0, Skipped: 0
+[INFO] BUILD SUCCESS
+```
+
+| Suite | Focus |
+|---|---|
+| `SentinelPrApplicationTest` | Application bootstrap & REST contract |
+| `SentinelPrP0VerificationTest` | Taint engine, suppression, atomic patch composition, regression verification |
+| `SentinelPrP1SecurityVerificationTest` | Core SEC-001…003 rule correctness |
+| `SentinelPrP2WorkflowVerificationTest` | CLI workflow, history, export formats |
+| `SentinelPrP3GovernanceVerificationTest` | Baselines, policy engine, audit trail, SARIF |
+| `SentinelPrP4IntelligenceVerificationTest` | Causal chains, calibration, multi-file planning, ARCH rules |
+
+---
+
+## Screenshots
+
+> **Placeholders — the repository currently ships no image assets. Capture these before release.**
+
+| Placeholder | Description |
+|---|---|
+| `docs/screenshots/cli-audit.png` | Terminal output of `sentinel <target>` audit summary |
+| `docs/screenshots/patch-suggestion.png` | GitHub PR inline comment with ```suggestion``` block |
+| `docs/screenshots/sarif-github.png` | GitHub Code Scanning alert list from a SARIF upload |
+| `docs/screenshots/ai-chat.png` | `--chat` assistant banner and response |
+| `docs/screenshots/history.png` | `--history` session table |
+
+---
+
+## Documentation
+
+| Document | Contents |
+|---|---|
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Internal architecture with Mermaid diagrams |
+| [docs/CLI.md](docs/CLI.md) | Every CLI command, examples, exit codes |
+| [docs/SECURITY.md](docs/SECURITY.md) | Rule catalog: detection logic, examples, remediations |
+| [docs/GOVERNANCE.md](docs/GOVERNANCE.md) | Baselines, policy engine, blocked rules, audit trail, signatures |
+| [docs/CLI.md](docs/CLI.md) · [USAGE_GUIDE.md](docs/USAGE_GUIDE.md) | Command reference & CI/CD GitHub Actions template |
+| [CHANGELOG.md](CHANGELOG.md) | Semantic version history |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution workflow |
+
+---
+
+## Contributing
+
+Pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) for the developer workflow: branch naming, `mvn test` gate, rule-addition checklist, and commit conventions.
+
+---
+
+## License
+
+**Apache License 2.0.** The official license text is committed at [`LICENSE`](LICENSE). See [docs/LICENSE-RECOMMENDATION.md](docs/LICENSE-RECOMMENDATION.md) for the rationale and remaining follow-ups (optional `NOTICE` file and `pom.xml` `<licenses>` block).

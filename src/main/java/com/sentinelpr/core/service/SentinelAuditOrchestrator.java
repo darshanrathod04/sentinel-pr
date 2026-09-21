@@ -226,11 +226,14 @@ public class SentinelAuditOrchestrator {
                 allPatches
         );
 
-        // Record in session memory if single file
+        // Record in session memory for both files and directories
         if (Files.isRegularFile(targetPath)) {
             String rawContent = Files.readString(targetPath);
             String fingerprint = sessionMemory.computeFingerprint(rawContent);
             sessionMemory.recordAuditRun(fingerprint, report);
+        } else {
+            String dirFingerprint = sessionMemory.computeFingerprint(targetPath.toAbsolutePath().toString() + ":" + sources.size());
+            sessionMemory.recordAuditRun(dirFingerprint, report);
         }
 
         return report;
@@ -369,7 +372,7 @@ public class SentinelAuditOrchestrator {
                 sources.size(), allActiveFindings.size(), allSuppressedFindings.size(), allPatches.size()
         );
 
-        return new ReviewReport(
+        ReviewReport report = new ReviewReport(
                 reportId,
                 Instant.now(),
                 targetPath.toString(),
@@ -382,6 +385,11 @@ public class SentinelAuditOrchestrator {
                 allSuppressedFindings,
                 allPatches
         );
+
+        String fingerprint = sessionMemory.computeFingerprint(targetPath.toAbsolutePath().toString() + ":" + diffContent.hashCode());
+        sessionMemory.recordAuditRun(fingerprint, report);
+
+        return report;
     }
 
     public ReviewReport auditPathWithDiff(Path targetPath, Path diffFile) throws IOException {
@@ -530,7 +538,7 @@ public class SentinelAuditOrchestrator {
                 sources.size(), allActiveFindings.size(), allSuppressedFindings.size(), allPatches.size()
         );
 
-        return new ReviewReport(
+        ReviewReport report = new ReviewReport(
                 reportId,
                 Instant.now(),
                 targetPath.toString(),
@@ -543,6 +551,11 @@ public class SentinelAuditOrchestrator {
                 allSuppressedFindings,
                 allPatches
         );
+
+        String fingerprint = sessionMemory.computeFingerprint(targetPath.toAbsolutePath().toString() + ":baseline:" + sources.size());
+        sessionMemory.recordAuditRun(fingerprint, report);
+
+        return report;
     }
 
     /**
@@ -611,7 +624,7 @@ public class SentinelAuditOrchestrator {
                 sources.size(), allActiveFindings.size(), allSuppressedFindings.size(), allPatches.size()
         );
 
-        return new ReviewReport(
+        ReviewReport report = new ReviewReport(
                 reportId,
                 Instant.now(),
                 targetPath.toString(),
@@ -624,6 +637,11 @@ public class SentinelAuditOrchestrator {
                 allSuppressedFindings,
                 allPatches
         );
+
+        String fingerprint = sessionMemory.computeFingerprint(targetPath.toAbsolutePath().toString() + ":diff-baseline:" + sources.size());
+        sessionMemory.recordAuditRun(fingerprint, report);
+
+        return report;
     }
 
     public CodeInspectionService getInspectionService() {

@@ -25,9 +25,11 @@ import com.sentinelpr.core.service.PatchVerifier;
 import com.sentinelpr.core.service.ReviewSessionMemory;
 import com.sentinelpr.core.service.RuleEvaluationService;
 import com.sentinelpr.core.service.SentinelAuditOrchestrator;
+import com.shreeai.os.platform.sdk.SDKResponse;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.Objects;
 
 /**
@@ -388,6 +390,14 @@ public class SentinelCliRunner {
             return 0;
         }
 
+        // Chat mode (Gemini BYOK) — must be detected before target-path parsing.
+        // The entire remaining text after --chat is treated as one prompt.
+        for (int i = 0; i < args.length; i++) {
+            if ("--chat".equalsIgnoreCase(args[i])) {
+                return executeChat(Arrays.copyOfRange(args, i + 1, args.length));
+            }
+        }
+
         Path target = null;
         Path diffPath = null;
         Path baselinePath = null;
@@ -433,6 +443,33 @@ public class SentinelCliRunner {
         System.exit(exitCode);
     }
 
+    /**
+     * Executes the SentinelPR AI assistant chat command (Gemini BYOK) via the
+     * Shree AI OS LLM router and prints the model response.
+     *
+     * @param promptArgs remaining command-line arguments after --chat
+     * @return 0 on success, 3 when the prompt is missing or blank
+     */
+    private int executeChat(String[] promptArgs) {
+        String prompt = (promptArgs == null) ? "" : String.join(" ", promptArgs).trim();
+        if (prompt.isEmpty()) {
+            System.out.println("Error: Missing chat prompt.");
+            System.out.println("Usage:");
+            System.out.println("  sentinel --chat \"your question\"");
+            return 3;
+        }
+
+        System.out.println("================================================");
+        System.out.println(" SentinelPR AI Assistant");
+        System.out.println(" Provider: Gemini (BYOK)");
+        System.out.println("================================================");
+        System.out.println();
+
+        SDKResponse response = SentinelClient.getInstance().chat(prompt);
+        System.out.println(response.answer());
+        return 0;
+    }
+
     private static void printUsage() {
         System.out.println("Usage: java -jar sentinel-pr.jar <target-path> [options]");
         System.out.println("Options:");
@@ -445,6 +482,7 @@ public class SentinelCliRunner {
         System.out.println("  --history                      Display review session history from Memory Kernel");
         System.out.println("  --run <run-id>                 Inspect detailed metadata for a specific review session");
         System.out.println("  -f, --format <format>          Output format (json, sarif, github, text) [default: json]");
+        System.out.println("  --chat \"<prompt>\"            Ask SentinelPR AI assistant (Gemini BYOK)");
     }
 
     public com.sentinelpr.client.MemoryFacade getMemoryFacade() {
