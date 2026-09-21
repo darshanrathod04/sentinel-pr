@@ -1,10 +1,15 @@
 # SentinelPR — Enterprise Code & Security Review Copilot
 
+# SentinelPR
+
+[![Release](https://img.shields.io/github/v/release/darshanrathod04/sentinel-pr)](https://github.com/darshanrathod04/sentinel-pr/releases)
+[![License](https://img.shields.io/github/license/darshanrathod04/sentinel-pr)](LICENSE)
+[![Build](https://img.shields.io/github/actions/workflow/status/darshanrathod04/sentinel-pr/maven.yml?branch=main)](https://github.com/darshanrathod04/sentinel-pr/actions)
 [![Java 21 LTS](https://img.shields.io/badge/Java-21%20LTS-orange.svg)](https://www.oracle.com/java/technologies/downloads/#java21)
 [![Spring Boot 4.0.2](https://img.shields.io/badge/Spring%20Boot-4.0.2-brightgreen.svg)](https://spring.io/projects/spring-boot)
 [![Shree AI OS](https://img.shields.io/badge/Shree%20AI%20OS-1.0.6--developer--preview-blue.svg)](https://github.com/darshanrathod04/shree-ai-os)
 [![Tests](https://img.shields.io/badge/tests-36%20passing-success.svg)](#verification)
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](docs/LICENSE-RECOMMENDATION.md)
+
 
 **SentinelPR v1.0.0** is an enterprise code and security review copilot for Java codebases, built on top of the **Shree AI OS** cognitive operating system platform (`io.github.darshanrathod04:shree-ai-os:1.0.6-developer-preview`).
 
