@@ -166,11 +166,14 @@ public class SentinelCliRunner {
      * @return generated ReviewReport
      */
     public ReviewReport run(Path targetPath, Path diffPath, Path sarifOutputPath, String format) {
-        return run(targetPath, diffPath, null, null, null, sarifOutputPath, null, format);
+        return run(targetPath, diffPath, null, null, null, sarifOutputPath, null, null, format);
     }
 
     /**
      * Executes review with full governance suite options.
+     *
+     * <p>Backward-compatible overload delegating to
+     * {@link #run(Path, Path, Path, Path, Path, Path, Path, Path, String)} without patch export.</p>
      */
     public ReviewReport run(
             Path targetPath,
@@ -182,7 +185,35 @@ public class SentinelCliRunner {
             Path auditLogPath,
             String format
     ) {
-        CliExecutionResult result = execute(targetPath, diffPath, baselinePath, createBaselinePath, policyPath, sarifOutputPath, auditLogPath, format);
+        return run(targetPath, diffPath, baselinePath, createBaselinePath, policyPath, sarifOutputPath, auditLogPath, null, format);
+    }
+
+    /**
+     * Executes review with full governance suite options and optional unified-diff patch export.
+     *
+     * @param targetPath         path to file or directory
+     * @param diffPath           optional path to unified git diff / patch file
+     * @param baselinePath       optional technical debt baseline snapshot
+     * @param createBaselinePath optional output path for a new baseline snapshot
+     * @param policyPath         optional enterprise compliance policy file
+     * @param sarifOutputPath    optional path to save SARIF v2.1.0 report
+     * @param auditLogPath       optional cryptographic audit trail ledger
+     * @param patchOutPath       optional output path for the synthesized unified diff patch
+     * @param format             output format (json, sarif, github, text)
+     * @return generated ReviewReport
+     */
+    public ReviewReport run(
+            Path targetPath,
+            Path diffPath,
+            Path baselinePath,
+            Path createBaselinePath,
+            Path policyPath,
+            Path sarifOutputPath,
+            Path auditLogPath,
+            Path patchOutPath,
+            String format
+    ) {
+        CliExecutionResult result = execute(targetPath, diffPath, baselinePath, createBaselinePath, policyPath, sarifOutputPath, auditLogPath, patchOutPath, format);
         if (result.getExitCode() == 2) {
             throw new RuntimeException("CLI execution failed");
         }
@@ -191,6 +222,9 @@ public class SentinelCliRunner {
 
     /**
      * Executes review with full governance evaluation, returning structured {@link CliExecutionResult}.
+     *
+     * <p>Backward-compatible overload delegating to
+     * {@link #execute(Path, Path, Path, Path, Path, Path, Path, Path, String)} without patch export.</p>
      */
     public CliExecutionResult execute(
             Path targetPath,
@@ -200,6 +234,24 @@ public class SentinelCliRunner {
             Path policyPath,
             Path sarifOutputPath,
             Path auditLogPath,
+            String format
+    ) {
+        return execute(targetPath, diffPath, baselinePath, createBaselinePath, policyPath, sarifOutputPath, auditLogPath, null, format);
+    }
+
+    /**
+     * Executes review with full governance evaluation and optional unified-diff patch export,
+     * returning structured {@link CliExecutionResult}.
+     */
+    public CliExecutionResult execute(
+            Path targetPath,
+            Path diffPath,
+            Path baselinePath,
+            Path createBaselinePath,
+            Path policyPath,
+            Path sarifOutputPath,
+            Path auditLogPath,
+            Path patchOutPath,
             String format
     ) {
         long startTime = System.currentTimeMillis();
@@ -286,6 +338,23 @@ public class SentinelCliRunner {
                             p.getRuleId(), p.getStatus(), p.isVerified(), p.isRegressionVerified());
                     System.out.println(p.getUnifiedDiff());
                 }
+            }
+
+            // Export the synthesized unified diff patch if requested
+            if (patchOutPath != null && !report.getPatches().isEmpty()) {
+                if (patchOutPath.getParent() != null) {
+                    Files.createDirectories(patchOutPath.getParent());
+                }
+                StringBuilder patchOutput = new StringBuilder();
+                for (UnifiedDiffPatch p : report.getPatches()) {
+                    patchOutput.append(p.getUnifiedDiff());
+                    if (!p.getUnifiedDiff().endsWith("\n")) {
+                        patchOutput.append(System.lineSeparator());
+                    }
+                }
+                Files.writeString(patchOutPath, patchOutput.toString());
+                System.out.println("\n[SentinelPR:CLI] Unified patch exported to:");
+                System.out.println(patchOutPath.toAbsolutePath());
             }
 
             // Export baseline snapshot if requested
@@ -405,6 +474,7 @@ public class SentinelCliRunner {
         Path policyPath = null;
         Path sarifPath = null;
         Path auditLogPath = null;
+        Path patchOutPath = null;
         String format = "json";
 
         for (int i = 0; i < args.length; i++) {
@@ -421,6 +491,8 @@ public class SentinelCliRunner {
                 sarifPath = Path.of(args[++i]);
             } else if ("--audit-log".equalsIgnoreCase(arg) && i + 1 < args.length) {
                 auditLogPath = Path.of(args[++i]);
+            } else if ("--patch-out".equalsIgnoreCase(arg) && i + 1 < args.length) {
+                patchOutPath = Path.of(args[++i]);
             } else if (("-f".equalsIgnoreCase(arg) || "--format".equalsIgnoreCase(arg)) && i + 1 < args.length) {
                 format = args[++i];
             } else if (!arg.startsWith("-")) {
@@ -433,7 +505,7 @@ public class SentinelCliRunner {
             return 3;
         }
 
-        CliExecutionResult result = execute(target, diffPath, baselinePath, createBaselinePath, policyPath, sarifPath, auditLogPath, format);
+        CliExecutionResult result = execute(target, diffPath, baselinePath, createBaselinePath, policyPath, sarifPath, auditLogPath, patchOutPath, format);
         return result.getExitCode();
     }
 
@@ -478,6 +550,7 @@ public class SentinelCliRunner {
         System.out.println("  --create-baseline <out.json>   Export findings as technical debt baseline snapshot");
         System.out.println("  --policy <policy-file>         Enforce enterprise compliance policy thresholds");
         System.out.println("  --sarif <output-file>          Export OASIS SARIF v2.1.0 report");
+        System.out.println("  --patch-out <file.diff>        Export synthesized unified diff patch");
         System.out.println("  --audit-log <ledger.log>       Append signed cryptographic SOC2/ISO27001 audit entry");
         System.out.println("  --history                      Display review session history from Memory Kernel");
         System.out.println("  --run <run-id>                 Inspect detailed metadata for a specific review session");
