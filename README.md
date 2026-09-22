@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/banner.png" alt="SentinelPR Hero Banner" width="100%"/>
+</p>
+
 # SentinelPR — Enterprise Code & Security Review Copilot
 
 # SentinelPR
@@ -59,7 +63,22 @@ SentinelPR audits Java source at pull-request boundaries using deterministic AST
 
 ---
 
-## Architecture
+## 🏗️ Architecture
+
+<p align="center">
+  <img src="assets/architecture.png" width="100%" alt="SentinelPR Architecture Overview"/>
+</p>
+
+**SentinelPR** transforms Java source code into verified security fixes through a six-stage pipeline powered by **Shree AI OS**.
+
+| Stage | Purpose |
+|--------|---------|
+| Input | Load project or Git diff |
+| AST Parser | Build Abstract Syntax Tree |
+| Rule Engine | Detect vulnerabilities |
+| Patch Composer | Generate secure fixes |
+| Verifier | Validate compilation & regressions |
+| Output | SARIF, GitHub PR, JSON, Text |
 
 SentinelPR is a Spring Boot application that runs both as an embedded CLI (`com.sentinelpr.cli.SentinelCliRunner`) and as a REST service (`/api/v1/sentinel/*`). Both front-ends share the same pipeline orchestrated by `SentinelAuditOrchestrator`:
 
@@ -192,6 +211,11 @@ Full reference with examples and expected output: [docs/CLI.md](docs/CLI.md).
 
 ## Example Audit
 
+<p align="center">
+  <img src="assets/screenshots/terminal-audit.png" width="95%" alt="SentinelPR Security Audit"/>
+</p>
+
+
 ```bash
 mvn -q compile exec:java \
   "-Dexec.mainClass=com.sentinelpr.cli.SentinelCliRunner" \
@@ -230,6 +254,12 @@ Message:         Audit completed. Scanned 1 source file(s), identified 3 vulnera
 @@ ...
 ```
 
+### Verified Patch Generation
+
+<p align="center">
+  <img src="assets/screenshots/patch-diff.png" width="95%"/>
+</p>
+
 ---
 
 ## Example AI Chat
@@ -239,6 +269,12 @@ mvn -q compile exec:java \
   "-Dexec.mainClass=com.sentinelpr.cli.SentinelCliRunner" \
   "-Dexec.args=--chat Explain why requestCount++ is unsafe in Java"
 ```
+
+### AI Security Assistant (Gemini BYOK)
+
+<p align="center">
+  <img src="assets/screenshots/chat-gemini.png" width="95%"/>
+</p>
 
 ```text
 ================================================
