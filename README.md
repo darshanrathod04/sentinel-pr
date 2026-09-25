@@ -4,8 +4,6 @@
 
 # SentinelPR — Enterprise Code & Security Review Copilot
 
-# SentinelPR
-
 [![Release](https://img.shields.io/github/v/release/darshanrathod04/sentinel-pr)](https://github.com/darshanrathod04/sentinel-pr/releases)
 [![License](https://img.shields.io/github/license/darshanrathod04/sentinel-pr)](LICENSE)
 [![Build](https://img.shields.io/github/actions/workflow/status/darshanrathod04/sentinel-pr/maven.yml?branch=main)](https://github.com/darshanrathod04/sentinel-pr/actions)
@@ -15,11 +13,13 @@
 [![Tests](https://img.shields.io/badge/tests-36%20passing-success.svg)](#verification)
 
 
-**SentinelPR v1.0.0** is an enterprise code and security review copilot for Java codebases, built on top of the **Shree AI OS** cognitive operating system platform (`io.github.darshanrathod04:shree-ai-os:1.0.6-developer-preview`).
+**SentinelPR v1.1.0** is an enterprise code and security review copilot for Java codebases, built on top of the **Shree AI OS** cognitive operating system platform (`io.github.darshanrathod04:shree-ai-os:1.0.6-developer-preview`).
 
 SentinelPR audits Java source at pull-request boundaries using deterministic AST analysis (JavaParser), intra-procedural taint tracking, causal root-cause reasoning, calibrated confidence scoring, and **verified** patch synthesis in standard unified diff format. Every audit can be governed by an enterprise policy, reconciled against an accepted technical-debt baseline, exported as OASIS SARIF v2.1.0 or a GitHub PR review payload, and recorded into a SHA-256-signed append-only audit ledger for SOC2 / ISO27001 evidence.
 
 ---
+
+
 
 ## Table of Contents
 
@@ -131,34 +131,36 @@ mvn test
 
 ---
 
-## Quick Start
+## ⚡ Quick Start (30 Seconds)
 
-Audit a file or directory with the CLI:
+Create `.github/workflows/sentinel-pr.yml`
 
-```bash
-mvn -q compile exec:java \
-  "-Dexec.mainClass=com.sentinelpr.cli.SentinelCliRunner" \
-  "-Dexec.args=src/main/java/com/sentinelpr"
+```yaml
+name: SentinelPR Security Gate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: darshanrathod04/sentinel-pr@v1.1.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+          fail_on_critical: "true"
 ```
-
-Or with the full governance suite:
-
-```bash
-mvn -q compile exec:java \
-  "-Dexec.mainClass=com.sentinelpr.cli.SentinelCliRunner" \
-  "-Dexec.args=target/src Vulnerable.java --baseline local-baseline.json --policy strict-policy.json --sarif report.sarif --audit-log compliance-audit.log -f github"
-```
-
-Start the REST API server:
-
-```bash
-mvn spring-boot:run
-# then: curl http://localhost:8080/api/v1/sentinel/health
-```
-
-Exit codes: `0` passed (or passed-with-baseline) · `1` policy breached · `2` internal error · `3` invalid arguments / missing target / missing chat prompt · `4` unverified patch failure.
-
----
 
 ## Gemini BYOK Setup
 
@@ -349,16 +351,14 @@ mvn test
 
 ## Screenshots
 
-> **Placeholders — the repository currently ships no image assets. Capture these before release.**
+### Security Audit
+![Terminal Audit](assets/screenshots/terminal-audit.png)
 
-| Placeholder | Description |
-|---|---|
-| `docs/screenshots/cli-audit.png` | Terminal output of `sentinel <target>` audit summary |
-| `docs/screenshots/patch-suggestion.png` | GitHub PR inline comment with ```suggestion``` block |
-| `docs/screenshots/sarif-github.png` | GitHub Code Scanning alert list from a SARIF upload |
-| `docs/screenshots/ai-chat.png` | `--chat` assistant banner and response |
-| `docs/screenshots/history.png` | `--history` session table |
+### Verified Patch Diff
+![Patch Diff](assets/screenshots/patch-diff.png)
 
+### AI Security Assistant
+![Gemini Chat](assets/screenshots/chat-gemini.png)
 ---
 
 ## Documentation

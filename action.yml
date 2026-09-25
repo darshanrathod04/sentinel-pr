@@ -1,0 +1,49 @@
+name: SentinelPR
+description: Enterprise Java Security & PR Review Copilot powered by Shree AI OS
+
+branding:
+  icon: shield
+  color: blue
+
+inputs:
+  github_token:
+    description: GitHub token for PR comments
+    required: true
+
+  gemini_api_key:
+    description: Gemini BYOK API key
+    required: false
+
+  fail_on_critical:
+    description: Fail workflow on CRITICAL findings
+    required: false
+    default: "true"
+
+  format:
+    description: Output format
+    required: false
+    default: github
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: "21"
+
+    - name: Download SentinelPR
+      shell: bash
+      run: |
+        curl -L \
+          https://github.com/darshanrathod04/sentinel-pr/releases/download/v1.0.1/sentinel-pr-1.0.1.jar \
+          -o sentinel-pr.jar
+
+    - name: Run SentinelPR
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+        GEMINI_API_KEY: ${{ inputs.gemini_api_key }}
+      run: |
+        java -jar sentinel-pr.jar . \
+          -f ${{ inputs.format }}

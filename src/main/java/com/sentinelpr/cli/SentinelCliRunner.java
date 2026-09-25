@@ -25,6 +25,8 @@ import com.sentinelpr.core.service.PatchVerifier;
 import com.sentinelpr.core.service.ReviewSessionMemory;
 import com.sentinelpr.core.service.RuleEvaluationService;
 import com.sentinelpr.core.service.SentinelAuditOrchestrator;
+import com.sentinelpr.github.ReviewCommentService;
+import com.sentinelpr.github.model.GitHubComment;
 import com.shreeai.os.platform.sdk.SDKResponse;
 
 import java.nio.file.Files;
@@ -48,6 +50,7 @@ public class SentinelCliRunner {
     private final PolicyEngine policyEngine;
     private final AuditTrailLogger auditTrailLogger;
     private final com.sentinelpr.client.MemoryFacade memoryFacade;
+    private final ReviewCommentService reviewCommentService;
     private final ObjectMapper objectMapper;
 
     public SentinelCliRunner() {
@@ -86,6 +89,19 @@ public class SentinelCliRunner {
             AuditTrailLogger auditTrailLogger,
             com.sentinelpr.client.MemoryFacade memoryFacade
     ) {
+        this(orchestrator, sarifGenerator, reviewCommentBuilder, baselineManager, policyEngine, auditTrailLogger, memoryFacade, new ReviewCommentService());
+    }
+
+    public SentinelCliRunner(
+            SentinelAuditOrchestrator orchestrator,
+            SarifReportGenerator sarifGenerator,
+            PrReviewCommentBuilder reviewCommentBuilder,
+            BaselineManager baselineManager,
+            PolicyEngine policyEngine,
+            AuditTrailLogger auditTrailLogger,
+            com.sentinelpr.client.MemoryFacade memoryFacade,
+            ReviewCommentService reviewCommentService
+    ) {
         this.orchestrator = Objects.requireNonNull(orchestrator, "orchestrator must not be null");
         this.sarifGenerator = Objects.requireNonNull(sarifGenerator, "sarifGenerator must not be null");
         this.reviewCommentBuilder = Objects.requireNonNull(reviewCommentBuilder, "reviewCommentBuilder must not be null");
@@ -93,6 +109,7 @@ public class SentinelCliRunner {
         this.policyEngine = Objects.requireNonNull(policyEngine, "policyEngine must not be null");
         this.auditTrailLogger = Objects.requireNonNull(auditTrailLogger, "auditTrailLogger must not be null");
         this.memoryFacade = Objects.requireNonNull(memoryFacade, "memoryFacade must not be null");
+        this.reviewCommentService = Objects.requireNonNull(reviewCommentService, "reviewCommentService must not be null");
         this.objectMapper = new ObjectMapper()
                 .registerModule(new JavaTimeModule())
                 .enable(SerializationFeature.INDENT_OUTPUT);
@@ -254,6 +271,26 @@ public class SentinelCliRunner {
             Path patchOutPath,
             String format
     ) {
+        return execute(targetPath, diffPath, baselinePath, createBaselinePath, policyPath, sarifOutputPath, auditLogPath, patchOutPath, format, null, null, false);
+    }
+
+    /**
+     * Executes review with full governance evaluation, patch export, and optional GitHub PR sticky comment posting.
+     */
+    public CliExecutionResult execute(
+            Path targetPath,
+            Path diffPath,
+            Path baselinePath,
+            Path createBaselinePath,
+            Path policyPath,
+            Path sarifOutputPath,
+            Path auditLogPath,
+            Path patchOutPath,
+            String format,
+            String repo,
+            Integer prNumber,
+            boolean postComment
+    ) {
         long startTime = System.currentTimeMillis();
         try {
             if (targetPath == null || !Files.exists(targetPath)) {
@@ -414,6 +451,29 @@ public class SentinelCliRunner {
             long durationMs = System.currentTimeMillis() - startTime;
             memoryFacade.recordSession(report, policyResult, durationMs);
 
+            // Post or update GitHub PR sticky comment if requested
+            if (postComment) {
+                String effectiveRepo = (repo != null && !repo.isBlank()) ? repo : System.getenv("GITHUB_REPOSITORY");
+                Integer effectivePr = prNumber;
+                if (effectivePr == null) {
+                    effectivePr = detectPrNumber();
+                }
+
+                if (effectiveRepo == null || effectiveRepo.isBlank() || effectivePr == null || effectivePr <= 0) {
+                    System.err.println("[SentinelPR:CLI] Error: --post-comment requires --repo <owner/repo> and --pr <number>");
+                    return new CliExecutionResult(3, report, policyResult, auditEntry);
+                }
+
+                try {
+                    System.out.println(String.format("\n[SentinelPR:GitHub] Posting or updating sticky PR review comment on %s#%d...", effectiveRepo, effectivePr));
+                    GitHubComment comment = reviewCommentService.postOrUpdateComment(effectiveRepo, effectivePr, report, policyResult);
+                    System.out.println("[SentinelPR:GitHub] Successfully posted sticky PR comment (ID: " + comment.getId() + ")");
+                } catch (Exception e) {
+                    System.err.println("[SentinelPR:GitHub] Failed to post PR review comment: " + e.getMessage());
+                    return new CliExecutionResult(2, report, policyResult, auditEntry);
+                }
+            }
+
             return new CliExecutionResult(exitCode, report, policyResult, auditEntry);
 
         } catch (Exception e) {
@@ -476,6 +536,9 @@ public class SentinelCliRunner {
         Path auditLogPath = null;
         Path patchOutPath = null;
         String format = "json";
+        String repo = null;
+        Integer prNumber = null;
+        boolean postComment = false;
 
         for (int i = 0; i < args.length; i++) {
             String arg = args[i];
@@ -493,6 +556,17 @@ public class SentinelCliRunner {
                 auditLogPath = Path.of(args[++i]);
             } else if ("--patch-out".equalsIgnoreCase(arg) && i + 1 < args.length) {
                 patchOutPath = Path.of(args[++i]);
+            } else if ("--repo".equalsIgnoreCase(arg) && i + 1 < args.length) {
+                repo = args[++i];
+            } else if ("--pr".equalsIgnoreCase(arg) && i + 1 < args.length) {
+                try {
+                    prNumber = Integer.parseInt(args[++i]);
+                } catch (NumberFormatException e) {
+                    System.err.println("[SentinelPR:CLI] Invalid --pr number: " + args[i]);
+                    return 3;
+                }
+            } else if ("--post-comment".equalsIgnoreCase(arg)) {
+                postComment = true;
             } else if (("-f".equalsIgnoreCase(arg) || "--format".equalsIgnoreCase(arg)) && i + 1 < args.length) {
                 format = args[++i];
             } else if (!arg.startsWith("-")) {
@@ -505,7 +579,7 @@ public class SentinelCliRunner {
             return 3;
         }
 
-        CliExecutionResult result = execute(target, diffPath, baselinePath, createBaselinePath, policyPath, sarifPath, auditLogPath, patchOutPath, format);
+        CliExecutionResult result = execute(target, diffPath, baselinePath, createBaselinePath, policyPath, sarifPath, auditLogPath, patchOutPath, format, repo, prNumber, postComment);
         return result.getExitCode();
     }
 
@@ -542,6 +616,30 @@ public class SentinelCliRunner {
         return 0;
     }
 
+    private Integer detectPrNumber() {
+        String prStr = System.getenv("PR_NUMBER");
+        if (prStr == null || prStr.isBlank()) {
+            prStr = System.getenv("GITHUB_PR_NUMBER");
+        }
+        if (prStr != null && !prStr.isBlank()) {
+            try {
+                return Integer.parseInt(prStr.trim());
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        String ref = System.getenv("GITHUB_REF");
+        if (ref != null && ref.startsWith("refs/pull/")) {
+            String[] parts = ref.split("/");
+            if (parts.length >= 3) {
+                try {
+                    return Integer.parseInt(parts[2]);
+                } catch (NumberFormatException ignored) {
+                }
+            }
+        }
+        return null;
+    }
+
     private static void printUsage() {
         System.out.println("Usage: java -jar sentinel-pr.jar <target-path> [options]");
         System.out.println("Options:");
@@ -554,6 +652,9 @@ public class SentinelCliRunner {
         System.out.println("  --audit-log <ledger.log>       Append signed cryptographic SOC2/ISO27001 audit entry");
         System.out.println("  --history                      Display review session history from Memory Kernel");
         System.out.println("  --run <run-id>                 Inspect detailed metadata for a specific review session");
+        System.out.println("  --repo <owner/repo>            GitHub repository for PR review comments");
+        System.out.println("  --pr <pr-number>               GitHub pull request number for PR review comments");
+        System.out.println("  --post-comment                 Post or update sticky PR review comment on GitHub");
         System.out.println("  -f, --format <format>          Output format (json, sarif, github, text) [default: json]");
         System.out.println("  --chat \"<prompt>\"            Ask SentinelPR AI assistant (Gemini BYOK)");
     }
@@ -572,5 +673,9 @@ public class SentinelCliRunner {
 
     public AuditTrailLogger getAuditTrailLogger() {
         return auditTrailLogger;
+    }
+
+    public ReviewCommentService getReviewCommentService() {
+        return reviewCommentService;
     }
 }
