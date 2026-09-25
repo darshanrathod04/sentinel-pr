@@ -13,7 +13,7 @@
 [![Tests](https://img.shields.io/badge/tests-36%20passing-success.svg)](#verification)
 
 
-**SentinelPR v1.1.1** is an enterprise code and security review copilot for Java codebases, built on top of the **Shree AI OS** cognitive operating system platform (`io.github.darshanrathod04:shree-ai-os:1.0.6-developer-preview`).
+**SentinelPR v1.1.2** is an enterprise code and security review copilot for Java codebases, built on top of the **Shree AI OS** cognitive operating system platform (`io.github.darshanrathod04:shree-ai-os:1.0.6-developer-preview`).
 
 SentinelPR audits Java source at pull-request boundaries using deterministic AST analysis (JavaParser), intra-procedural taint tracking, causal root-cause reasoning, calibrated confidence scoring, and **verified** patch synthesis in standard unified diff format. Every audit can be governed by an enterprise policy, reconciled against an accepted technical-debt baseline, exported as OASIS SARIF v2.1.0 or a GitHub PR review payload, and recorded into a SHA-256-signed append-only audit ledger for SOC2 / ISO27001 evidence.
 
@@ -155,7 +155,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: darshanrathod04/sentinel-pr@v1.1.1
+      - uses: darshanrathod04/sentinel-pr@v1.1.2
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
