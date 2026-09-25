@@ -44,6 +44,8 @@ public class VulnerableService {
      */
     public void trackRequest() {
         requestCount++;
+
+        System.out.println("PR verification");
     }
 
     public int getRequestCount() {
