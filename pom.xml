@@ -13,7 +13,7 @@
 
     <groupId>com.sentinelpr</groupId>
     <artifactId>sentinel-pr</artifactId>
-    <version>1.1.0</version>
+    <version>1.1.2</version>
     <name>SentinelPR - Enterprise Code &amp; Security Review Copilot</name>
     <description>Production-grade code and security copilot built on top of Shree AI OS 10-SDK surface</description>
 
