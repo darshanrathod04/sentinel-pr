@@ -19,7 +19,7 @@ jobs:
           fetch-depth: 0
 
       - name: Run SentinelPR
-        uses: darshanrathod04/sentinel-pr@v1.1.2
+        uses: darshanrathod04/sentinel-pr@v1.1.3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
