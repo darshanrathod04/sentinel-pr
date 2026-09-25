@@ -155,7 +155,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: darshanrathod04/sentinel-pr@v1.1.1
+      - uses: darshanrathod04/sentinel-pr@v1.1.2
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
