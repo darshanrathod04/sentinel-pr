@@ -32,8 +32,14 @@ public class ReviewCommentService {
         this.stickyCommentFinder = Objects.requireNonNull(stickyCommentFinder, "stickyCommentFinder must not be null");
     }
 
+    public static final int MAX_BODY_LENGTH = 60_000;
+    public static final int MAX_FINDINGS_DISPLAYED = 20;
+    public static final int MAX_PATCH_SUGGESTIONS = 3;
+    public static final int MAX_RATIONALE_LENGTH = 300;
+
     /**
      * Synthesizes GitHub markdown review comment from review report and policy evaluation result.
+     * Enforces size limits: at most 20 findings, at most 3 patch suggestions, and <= 60,000 characters.
      *
      * @param report ReviewReport generated from the audit
      * @param policy optional PolicyEvaluationResult
@@ -59,7 +65,9 @@ public class ReviewCommentService {
         if (findings.isEmpty()) {
             sb.append("| CLEAN | NONE | Clean (0 active findings) |\n");
         } else {
-            for (SecurityFinding f : findings) {
+            int displayCount = Math.min(findings.size(), MAX_FINDINGS_DISPLAYED);
+            for (int i = 0; i < displayCount; i++) {
+                SecurityFinding f = findings.get(i);
                 String severity = f.getSeverity() != null ? f.getSeverity().name() : "MEDIUM";
                 String ruleId = (f.getRule() != null && f.getRule().getRuleId() != null)
                         ? f.getRule().getRuleId()
@@ -70,6 +78,10 @@ public class ReviewCommentService {
                 }
                 sb.append(String.format("| %s | %s | %s |\n", severity, ruleId, file));
             }
+            if (findings.size() > MAX_FINDINGS_DISPLAYED) {
+                int omitted = findings.size() - MAX_FINDINGS_DISPLAYED;
+                sb.append(String.format("\n... %d additional findings omitted. See SARIF artifact for complete report.\n", omitted));
+            }
         }
         sb.append("\n");
 
@@ -79,25 +91,50 @@ public class ReviewCommentService {
                 : Collections.emptyList();
 
         StringBuilder diffBuilder = new StringBuilder();
+        int patchCount = 0;
         for (UnifiedDiffPatch p : patches) {
             if (p != null && p.getUnifiedDiff() != null && !p.getUnifiedDiff().isBlank()) {
+                if (patchCount >= MAX_PATCH_SUGGESTIONS) {
+                    break;
+                }
                 if (diffBuilder.length() > 0) {
                     diffBuilder.append("\n");
                 }
                 diffBuilder.append(p.getUnifiedDiff().trim());
+                patchCount++;
             }
         }
 
+        String closingBlock = "\n```\n\n---\nPowered by SentinelPR + Shree AI OS\n";
+        String emptyBlock = "```diff\n# No patch required\n```\n\n---\nPowered by SentinelPR + Shree AI OS\n";
+
         if (diffBuilder.length() > 0) {
-            sb.append("```diff\n").append(diffBuilder).append("\n```\n\n");
+            sb.append("```diff\n");
+            int maxDiffLength = MAX_BODY_LENGTH - sb.length() - closingBlock.length();
+            if (maxDiffLength > 0 && diffBuilder.length() > maxDiffLength) {
+                int lastNewline = diffBuilder.lastIndexOf("\n", maxDiffLength);
+                if (lastNewline > maxDiffLength / 2) {
+                    diffBuilder.setLength(lastNewline);
+                } else {
+                    diffBuilder.setLength(maxDiffLength);
+                }
+            }
+            sb.append(diffBuilder).append(closingBlock);
         } else {
-            sb.append("```diff\n# No patch required\n```\n\n");
+            sb.append(emptyBlock);
         }
 
-        sb.append("---\n");
-        sb.append("Powered by SentinelPR + Shree AI OS\n");
+        String result = sb.toString();
+        if (result.length() > MAX_BODY_LENGTH) {
+            result = result.substring(0, MAX_BODY_LENGTH);
+        }
+        return result;
+    }
 
-        return sb.toString();
+    public static String truncateRationale(String rationale) {
+        if (rationale == null) return null;
+        String trimmed = rationale.trim();
+        return trimmed.length() > MAX_RATIONALE_LENGTH ? trimmed.substring(0, MAX_RATIONALE_LENGTH) : trimmed;
     }
 
     public String buildCommentMarkdown(ReviewReport report) {
@@ -122,6 +159,9 @@ public class ReviewCommentService {
             PolicyEvaluationResult policy
     ) {
         String markdown = buildCommentMarkdown(report, policy);
+        if (markdown.length() > MAX_BODY_LENGTH) {
+            markdown = markdown.substring(0, MAX_BODY_LENGTH);
+        }
         List<GitHubComment> existingComments = gitHubApiClient.getComments(repo, prNumber);
         OptionalLong stickyCommentIdOpt = stickyCommentFinder.findStickyCommentId(existingComments);
 

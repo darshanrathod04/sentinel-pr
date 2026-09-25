@@ -278,4 +278,155 @@ class ReviewCommentServiceTest {
         // Verify that reviewCommentService posted a comment to GitHub
         verify(mockApiClient).createComment(eq(REPO), eq(PR_NUMBER), anyString());
     }
+
+    @Test
+    @DisplayName("Hotfix v1.1.2: Large review with 50 findings and massive diffs never exceeds 60,000 characters")
+    void testLargeReviewLimitsAndTruncationUnder60000Characters() {
+        // Create 50 findings
+        List<SecurityFinding> findings = new java.util.ArrayList<>();
+        for (int i = 1; i <= 50; i++) {
+            findings.add(new SecurityFinding(
+                    "FND-" + i,
+                    SecurityRule.FAIL_OPEN_SECURITY,
+                    Severity.HIGH,
+                    "src/main/java/Service" + i + ".java",
+                    "Service" + i,
+                    "method" + i,
+                    i * 10,
+                    i * 10 + 5,
+                    "snippet " + i,
+                    "Description for vulnerability " + i,
+                    "Rationale for vulnerability " + i,
+                    "Remediation guidance " + i,
+                    0.95
+            ));
+        }
+
+        // Create 6 patches, each with 20,000 characters of unified diff (total 120,000 chars)
+        List<UnifiedDiffPatch> patches = new java.util.ArrayList<>();
+        String largeChunk = "+ // very large patch line for padding content and checking truncation\n".repeat(300);
+        for (int i = 1; i <= 6; i++) {
+            patches.add(new UnifiedDiffPatch(
+                    "FND-" + i,
+                    "SEC-001",
+                    "src/main/java/Service" + i + ".java",
+                    "--- a/Service" + i + ".java\n+++ b/Service" + i + ".java\n@@ -1,5 +1,5 @@\n# PATCH " + i + "\n" + largeChunk,
+                    "patchedSource",
+                    UnifiedDiffPatch.Status.SUCCESS,
+                    true,
+                    true,
+                    "Verified"
+            ));
+        }
+
+        ReviewReport largeReport = new ReviewReport(
+                "REV-LARGE",
+                Instant.now(),
+                "src/main/java",
+                50,
+                50,
+                "FAILED",
+                false,
+                "Large audit",
+                findings,
+                Collections.emptyList(),
+                patches
+        );
+
+        String markdown = reviewCommentService.buildCommentMarkdown(largeReport, null);
+
+        // 1. Verify strict 60,000 character ceiling
+        assertTrue(markdown.length() <= ReviewCommentService.MAX_BODY_LENGTH,
+                "Markdown body must never exceed 60,000 characters. Actual: " + markdown.length());
+
+        // 2. Verify sticky marker is preserved
+        assertTrue(markdown.startsWith("<!-- sentinel-pr-review -->\n\n"),
+                "Sticky marker must remain at the top");
+
+        // 3. Verify exactly 20 findings displayed in table
+        int findingRowsCount = 0;
+        for (String line : markdown.split("\n")) {
+            if (line.startsWith("| HIGH | SEC-001-FAIL-OPEN |")) {
+                findingRowsCount++;
+            }
+        }
+        assertEquals(20, findingRowsCount, "Must display at most the first 20 findings");
+
+        // 4. Verify omission notice with exact text
+        assertTrue(markdown.contains("... 30 additional findings omitted. See SARIF artifact for complete report."),
+                "Must include omission notice for the remaining 30 findings");
+
+        // 5. Verify at most 3 patch suggestions included
+        int patchHeadersCount = 0;
+        for (int i = 1; i <= 6; i++) {
+            if (markdown.contains("# PATCH " + i)) {
+                patchHeadersCount++;
+            }
+        }
+        assertTrue(patchHeadersCount <= ReviewCommentService.MAX_PATCH_SUGGESTIONS,
+                "Must include at most 3 patch suggestions. Found: " + patchHeadersCount);
+        assertFalse(markdown.contains("# PATCH 4"), "Patch 4 must be omitted");
+
+        // 6. Verify postOrUpdateComment sends payload under 60,000 characters
+        when(mockApiClient.getComments(REPO, PR_NUMBER)).thenReturn(Collections.emptyList());
+        when(mockApiClient.createComment(eq(REPO), eq(PR_NUMBER), anyString()))
+                .thenReturn(new GitHubComment(1001L, "Posted"));
+
+        reviewCommentService.postOrUpdateComment(REPO, PR_NUMBER, largeReport, null);
+
+        ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
+        verify(mockApiClient).createComment(eq(REPO), eq(PR_NUMBER), captor.capture());
+        assertTrue(captor.getValue().length() <= 60_000,
+                "Posted body must be <= 60,000 characters. Actual: " + captor.getValue().length());
+    }
+
+    @Test
+    @DisplayName("Hotfix v1.1.2: PrReviewCommentBuilder truncates rationale to 300 chars and enforces limits")
+    void testPrReviewCommentBuilderLimits() {
+        com.sentinelpr.core.export.github.PrReviewCommentBuilder builder =
+                new com.sentinelpr.core.export.github.PrReviewCommentBuilder();
+
+        // 500-character causal rationale
+        String longRationale = "A".repeat(500);
+        SecurityFinding finding = new SecurityFinding(
+                "FND-RATIONALE",
+                SecurityRule.SQL_INJECTION,
+                Severity.CRITICAL,
+                "src/main/java/SqlService.java",
+                "SqlService",
+                "exec",
+                10,
+                15,
+                "stmt.execute(sql)",
+                "SQL injection",
+                longRationale,
+                "Use prepared statement",
+                0.99
+        );
+
+        String inlineMarkdown = builder.buildInlineCommentMarkdown(finding, null);
+        assertNotNull(inlineMarkdown);
+
+        // Verify rationale in inline comment is truncated to 300 characters
+        assertTrue(inlineMarkdown.contains("**Causal Rationale:**"));
+        assertFalse(inlineMarkdown.contains("A".repeat(301)), "Rationale must not exceed 300 characters");
+        assertTrue(inlineMarkdown.contains("A".repeat(300)), "Rationale should contain first 300 characters");
+
+        // Test static truncateRationale helper
+        assertEquals(300, com.sentinelpr.github.ReviewCommentService.truncateRationale(longRationale).length());
+        assertEquals(300, com.sentinelpr.core.export.github.PrReviewCommentBuilder.truncateRationale(longRationale).length());
+
+        // Test summary markdown with 25 findings
+        List<SecurityFinding> findings = new java.util.ArrayList<>();
+        for (int i = 1; i <= 25; i++) {
+            findings.add(new SecurityFinding("FND-" + i, SecurityRule.SQL_INJECTION, Severity.HIGH,
+                    "File" + i + ".java", "Class" + i, "m", 1, 2, "code", "desc", "rat", "rem", 0.9));
+        }
+        ReviewReport report = new ReviewReport("REV-25", Instant.now(), "src", 25, 25, "FAILED", false, "msg",
+                findings, Collections.emptyList(), Collections.emptyList());
+
+        String summary = builder.buildReviewSummaryMarkdown(report, "REQUEST_CHANGES");
+        assertTrue(summary.length() <= 60_000);
+        assertTrue(summary.contains("... 5 additional findings omitted. See SARIF artifact for complete report."));
+    }
 }

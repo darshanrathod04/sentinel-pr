@@ -29,6 +29,11 @@ import java.util.Objects;
  */
 public class PrReviewCommentBuilder {
 
+    public static final int MAX_BODY_LENGTH = 60_000;
+    public static final int MAX_FINDINGS_DISPLAYED = 20;
+    public static final int MAX_PATCH_SUGGESTIONS = 3;
+    public static final int MAX_RATIONALE_LENGTH = 300;
+
     private final ObjectMapper objectMapper;
 
     public PrReviewCommentBuilder() {
@@ -165,9 +170,17 @@ public class PrReviewCommentBuilder {
         String body = buildReviewSummaryMarkdown(report, policyResult, event);
 
         List<GitHubInlineComment> comments = new ArrayList<>();
-        for (SecurityFinding finding : report.getFindings()) {
+        int patchSuggestionsCount = 0;
+        int findingsLimit = Math.min(report.getFindings().size(), MAX_FINDINGS_DISPLAYED);
+        for (int i = 0; i < findingsLimit; i++) {
+            SecurityFinding finding = report.getFindings().get(i);
             UnifiedDiffPatch patch = findPatchForFinding(finding, report.getPatches());
-            String commentBody = buildInlineCommentMarkdown(finding, patch);
+            boolean includePatch = false;
+            if (patch != null && patchSuggestionsCount < MAX_PATCH_SUGGESTIONS) {
+                includePatch = true;
+                patchSuggestionsCount++;
+            }
+            String commentBody = buildInlineCommentMarkdown(finding, includePatch ? patch : null);
 
             String filePath = cleanFilePath(finding.getTargetFile());
             int targetLine = finding.getEndLine() > 0 ? finding.getEndLine() : Math.max(1, finding.getStartLine());
@@ -332,7 +345,9 @@ public class PrReviewCommentBuilder {
             sb.append("| Rule ID | Severity | Location | Description | Patch Status | Verified |\n");
             sb.append("| :--- | :--- | :--- | :--- | :--- | :--- |\n");
 
-            for (SecurityFinding f : report.getFindings()) {
+            int displayCount = Math.min(report.getFindings().size(), MAX_FINDINGS_DISPLAYED);
+            for (int i = 0; i < displayCount; i++) {
+                SecurityFinding f = report.getFindings().get(i);
                 UnifiedDiffPatch patch = findPatchForFinding(f, report.getPatches());
                 String loc = String.format("`%s:%d-%d`", getFileName(f.getTargetFile()), f.getStartLine(), f.getEndLine());
                 String patchStatus = patch != null ? patch.getStatus().name() : "N/A";
@@ -348,6 +363,11 @@ public class PrReviewCommentBuilder {
                 ));
             }
             sb.append("\n");
+
+            if (report.getFindings().size() > MAX_FINDINGS_DISPLAYED) {
+                int omitted = report.getFindings().size() - MAX_FINDINGS_DISPLAYED;
+                sb.append(String.format("... %d additional findings omitted. See SARIF artifact for complete report.\n\n", omitted));
+            }
         }
 
         // Suppressed Findings Section
@@ -371,7 +391,11 @@ public class PrReviewCommentBuilder {
         sb.append("---\n");
         sb.append("*Generated autonomously by **SentinelPR** powered by **Shree AI OS**.*");
 
-        return sb.toString();
+        String result = sb.toString();
+        if (result.length() > MAX_BODY_LENGTH) {
+            result = result.substring(0, MAX_BODY_LENGTH);
+        }
+        return result;
     }
 
     /**
@@ -397,7 +421,11 @@ public class PrReviewCommentBuilder {
 
         if (finding.getCausalRationale() != null && !finding.getCausalRationale().isBlank()) {
             sb.append("**Causal Rationale:**\n");
-            sb.append(finding.getCausalRationale()).append("\n\n");
+            String rationale = finding.getCausalRationale().trim();
+            if (rationale.length() > MAX_RATIONALE_LENGTH) {
+                rationale = rationale.substring(0, MAX_RATIONALE_LENGTH);
+            }
+            sb.append(rationale).append("\n\n");
         }
 
         if (finding.getRemediation() != null && !finding.getRemediation().isBlank()) {
@@ -426,7 +454,17 @@ public class PrReviewCommentBuilder {
             }
         }
 
-        return sb.toString().trim();
+        String commentResult = sb.toString().trim();
+        if (commentResult.length() > MAX_BODY_LENGTH) {
+            commentResult = commentResult.substring(0, MAX_BODY_LENGTH);
+        }
+        return commentResult;
+    }
+
+    public static String truncateRationale(String rationale) {
+        if (rationale == null) return null;
+        String trimmed = rationale.trim();
+        return trimmed.length() > MAX_RATIONALE_LENGTH ? trimmed.substring(0, MAX_RATIONALE_LENGTH) : trimmed;
     }
 
     /**
