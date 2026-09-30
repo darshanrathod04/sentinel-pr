@@ -1,14 +1,17 @@
 package com.sentinelpr.core.model;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.sentinelpr.core.remediation.PatchQualityMetrics;
+import com.sentinelpr.core.remediation.PatchValidationStatus;
 
+import java.util.List;
 import java.util.Objects;
 
 /**
  * <b>UnifiedDiffPatch</b>
  *
  * <p>Verified code patch represented in unified diff format, with both AST syntax
- * verification and post-patch regression validation tracking.</p>
+ * verification, post-patch regression validation tracking, and patch quality metrics.</p>
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class UnifiedDiffPatch {
@@ -30,6 +33,8 @@ public class UnifiedDiffPatch {
     private final boolean verified;
     private final boolean regressionVerified;
     private final String verificationMessage;
+    private final PatchQualityMetrics qualityMetrics;
+    private final PatchValidationStatus validationStatus;
 
     public UnifiedDiffPatch(
             String findingId,
@@ -41,7 +46,7 @@ public class UnifiedDiffPatch {
             boolean verified,
             String verificationMessage
     ) {
-        this(findingId, ruleId, targetFile, unifiedDiff, patchedSource, status, verified, false, verificationMessage);
+        this(findingId, ruleId, targetFile, unifiedDiff, patchedSource, status, verified, false, verificationMessage, null, null);
     }
 
     public UnifiedDiffPatch(
@@ -55,6 +60,22 @@ public class UnifiedDiffPatch {
             boolean regressionVerified,
             String verificationMessage
     ) {
+        this(findingId, ruleId, targetFile, unifiedDiff, patchedSource, status, verified, regressionVerified, verificationMessage, null, null);
+    }
+
+    public UnifiedDiffPatch(
+            String findingId,
+            String ruleId,
+            String targetFile,
+            String unifiedDiff,
+            String patchedSource,
+            Status status,
+            boolean verified,
+            boolean regressionVerified,
+            String verificationMessage,
+            PatchQualityMetrics qualityMetrics,
+            PatchValidationStatus validationStatus
+    ) {
         this.findingId = Objects.requireNonNull(findingId, "findingId must not be null");
         this.ruleId = ruleId != null ? ruleId : "";
         this.targetFile = targetFile != null ? targetFile : "";
@@ -66,6 +87,12 @@ public class UnifiedDiffPatch {
         this.verified = statusSuccess && diffValid && verified;
         this.regressionVerified = this.verified && regressionVerified;
         this.verificationMessage = verificationMessage != null ? verificationMessage : "";
+        this.validationStatus = validationStatus != null
+                ? validationStatus
+                : (this.verified ? PatchValidationStatus.VALID_PATCH : PatchValidationStatus.INVALID_PATCH);
+        this.qualityMetrics = qualityMetrics != null
+                ? qualityMetrics
+                : new PatchQualityMetrics(this.verified, this.verified, !this.verified, false, this.ruleId, List.of(this.ruleId), this.verificationMessage);
     }
 
     public String getFindingId() {
@@ -108,6 +135,14 @@ public class UnifiedDiffPatch {
         return verificationMessage;
     }
 
+    public PatchQualityMetrics getQualityMetrics() {
+        return qualityMetrics;
+    }
+
+    public PatchValidationStatus getValidationStatus() {
+        return validationStatus;
+    }
+
     @Override
     public String toString() {
         return "UnifiedDiffPatch{" +
@@ -117,6 +152,7 @@ public class UnifiedDiffPatch {
                 ", status=" + status +
                 ", verified=" + verified +
                 ", regressionVerified=" + regressionVerified +
+                ", validationStatus=" + validationStatus +
                 '}';
     }
 }

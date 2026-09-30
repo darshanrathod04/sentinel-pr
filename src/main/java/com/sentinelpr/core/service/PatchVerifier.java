@@ -8,6 +8,7 @@ import com.sentinelpr.core.analysis.SuppressionManager;
 import com.sentinelpr.core.model.InspectedSource;
 import com.sentinelpr.core.model.SecurityFinding;
 import com.sentinelpr.core.model.Severity;
+import com.sentinelpr.core.remediation.PatchValidationStatus;
 import com.shreeai.os.platform.kernels.project.parser.JavaAstParser;
 
 import java.util.Collections;
@@ -60,7 +61,7 @@ public class PatchVerifier {
      */
     public PatchVerificationResult verify(String patchedSource, String simPath) {
         if (patchedSource == null || patchedSource.isBlank()) {
-            return new PatchVerificationResult(false, false, Collections.emptyList(), "Patched source is empty");
+            return new PatchVerificationResult(false, false, Collections.emptyList(), "Patched source is empty", PatchValidationStatus.NOT_APPLICABLE);
         }
 
         String pathStr = (simPath != null && !simPath.isBlank()) ? simPath : "PatchedService.java";
@@ -70,14 +71,14 @@ public class PatchVerifier {
             astParser.parse(patchedSource, pathStr);
         } catch (Exception e) {
             return new PatchVerificationResult(false, false, Collections.emptyList(),
-                    "JavaAstParser syntax verification failed: " + e.getMessage());
+                    "JavaAstParser syntax verification failed: " + e.getMessage(), PatchValidationStatus.INVALID_PATCH);
         }
 
         // 2. Verify with JavaParser for Java 21 LTS AST compilation unit
         Optional<CompilationUnit> cuResult = javaParser.parse(patchedSource).getResult();
         if (cuResult.isEmpty()) {
             return new PatchVerificationResult(false, false, Collections.emptyList(),
-                    "JavaParser AST verification failed: invalid Java 21 syntax");
+                    "JavaParser AST verification failed: invalid Java 21 syntax", PatchValidationStatus.INVALID_PATCH);
         }
 
         // 3. Re-run inspection and rule evaluation on patched code
@@ -86,7 +87,7 @@ public class PatchVerifier {
             inspected = inspectionService.inspectSourceCode(patchedSource, pathStr);
         } catch (Exception e) {
             return new PatchVerificationResult(true, false, Collections.emptyList(),
-                    "Failed to re-inspect patched source: " + e.getMessage());
+                    "Failed to re-inspect patched source: " + e.getMessage(), PatchValidationStatus.VALID_PATCH);
         }
 
         List<SecurityFinding> rawRemaining = evaluationService.evaluate(inspected);
@@ -106,6 +107,6 @@ public class PatchVerifier {
                 ? String.format("AST syntax verified (Java 21 LTS) & regression verification PASSED (0 critical findings remain, %d non-critical)", activeRemaining.size())
                 : String.format("Regression verification FAILED: %d critical vulnerabilities remain unresolved: %s", criticalRemaining, activeRemaining);
 
-        return new PatchVerificationResult(true, regressionVerified, activeRemaining, message);
+        return new PatchVerificationResult(true, regressionVerified, activeRemaining, message, PatchValidationStatus.VALID_PATCH);
     }
 }

@@ -6,6 +6,7 @@ import com.github.javaparser.ast.body.MethodDeclaration;
 import com.github.javaparser.ast.body.VariableDeclarator;
 import com.github.javaparser.ast.expr.AnnotationExpr;
 import com.github.javaparser.ast.expr.AssignExpr;
+import com.github.javaparser.ast.expr.MethodCallExpr;
 import com.github.javaparser.ast.expr.NameExpr;
 import com.github.javaparser.ast.expr.StringLiteralExpr;
 import com.sentinelpr.core.model.InspectedSource;
@@ -158,6 +159,21 @@ public class SecretScanningEngine {
                     String secretVal = literal.getValue();
                     if (!isWhitelistedPlaceholder(secretVal)) {
                         addSecretFinding(findings, source, assign, "Hardcoded Credential in assignment to '" + varName + "'", secretVal, line, pathStr);
+                        reportedLines.add(line);
+                    }
+                }
+            }
+        }
+
+        // 4. Method calls: DriverManager.getConnection with literal credentials
+        for (MethodCallExpr call : source.getMethodCalls()) {
+            if ("getConnection".equals(call.getNameAsString())
+                    && call.getScope().map(s -> s.toString().contains("DriverManager")).orElse(false)) {
+                boolean hasLiteral = call.getArguments().stream().anyMatch(arg -> arg instanceof StringLiteralExpr);
+                if (hasLiteral) {
+                    int line = call.getBegin().map(p -> p.line).orElse(0);
+                    if (!reportedLines.contains(line)) {
+                        addSecretFinding(findings, source, call, "Hardcoded Database Credentials in DriverManager.getConnection", call.toString(), line, pathStr);
                         reportedLines.add(line);
                     }
                 }

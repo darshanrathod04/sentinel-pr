@@ -162,6 +162,14 @@ public class SecurityFinding {
         );
     }
 
+    public SecurityFinding withLines(int newStartLine, int newEndLine) {
+        return new SecurityFinding(
+                this.id, this.rule, this.severity, this.targetFile, this.className, this.methodName,
+                newStartLine, newEndLine, this.vulnerableSnippet, this.description,
+                this.causalRationale, this.remediation, this.confidence, this.causalChain, this.exploitabilityIndex
+        );
+    }
+
     @Override
     public String toString() {
         return "SecurityFinding{" +
