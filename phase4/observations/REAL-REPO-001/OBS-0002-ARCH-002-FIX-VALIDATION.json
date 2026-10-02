@@ -1,0 +1,26 @@
+{
+  "observationId": "OBS-0002",
+  "repositoryId": "REAL-REPO-001",
+  "commitSha": "bb4b69a50ee814d00129fdbe2286eeaa048a078f",
+  "ruleId": "ARCH-002-LEAKY-ABSTRACTION",
+  "detectionStatus": "DETECTED",
+  "detectedSeverity": "HIGH",
+  "location": {
+    "filePath": "src/main/java/com/application/todoList/controller/TaskController.java",
+    "startLine": 18,
+    "endLine": 31,
+    "targetConstruct": "public Task addtask(@RequestBody Task task)"
+  },
+  "findingSnippet": "@PostMapping\npublic Task addtask(@RequestBody Task task){\n    return service.createTask(task);\n}",
+  "groundTruth": "VULNERABLE",
+  "classification": "TP",
+  "classificationRationale": "Following the implementation of cross-file JPA entity resolution in ArchitectureReviewEngine, SentinelPR successfully resolves Task against Task.java in allSources, recognizes the @Entity annotation from jakarta.persistence, and detects the leaky entity abstraction on TaskController endpoints. Verified as True Positive (TP).",
+  "reviewer": "Human Ground-Truth Auditor",
+  "reviewedAt": "2026-10-02T17:35:00Z",
+  "remediationStage": "NOT_ATTEMPTED",
+  "engineDefect": {
+    "isEngineDefect": false,
+    "component": "NONE",
+    "description": "Defect in ArchitectureReviewEngine.isEntityType() previously recorded in OBS-0001 resolved; cross-file entity resolution active."
+  }
+}

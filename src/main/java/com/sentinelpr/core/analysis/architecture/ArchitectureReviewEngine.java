@@ -3,6 +3,7 @@ package com.sentinelpr.core.analysis.architecture;
 import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
 import com.github.javaparser.ast.body.Parameter;
+import com.github.javaparser.ast.expr.AnnotationExpr;
 import com.github.javaparser.ast.expr.MethodCallExpr;
 import com.github.javaparser.ast.expr.ObjectCreationExpr;
 import com.sentinelpr.core.model.InspectedSource;
@@ -49,7 +50,7 @@ public class ArchitectureReviewEngine {
             return findings;
         }
 
-        findings.addAll(evaluateLeakyAbstractions(source));
+        findings.addAll(evaluateLeakyAbstractions(source, allSources));
         findings.addAll(evaluateNonDeterministicCalls(source));
         findings.addAll(evaluateCyclicDependencies(source, allSources));
 
@@ -60,6 +61,13 @@ public class ArchitectureReviewEngine {
      * ARCH-002: Detects database entities directly exposed in REST Controller endpoints.
      */
     public List<SecurityFinding> evaluateLeakyAbstractions(InspectedSource source) {
+        return evaluateLeakyAbstractions(source, List.of(source));
+    }
+
+    /**
+     * ARCH-002: Detects database entities directly exposed in REST Controller endpoints with cross-file symbol resolution.
+     */
+    public List<SecurityFinding> evaluateLeakyAbstractions(InspectedSource source, List<InspectedSource> allSources) {
         List<SecurityFinding> findings = new ArrayList<>();
 
         boolean isController = source.getClassDeclarations().stream().anyMatch(c ->
@@ -86,12 +94,12 @@ public class ArchitectureReviewEngine {
             }
 
             String returnType = method.getTypeAsString();
-            boolean returnsEntity = isEntityType(returnType, source);
+            boolean returnsEntity = isEntityType(returnType, source, allSources);
 
             boolean acceptsEntity = false;
             String paramName = "";
             for (Parameter p : method.getParameters()) {
-                if (isEntityType(p.getTypeAsString(), source)) {
+                if (isEntityType(p.getTypeAsString(), source, allSources)) {
                     acceptsEntity = true;
                     paramName = p.getNameAsString() + " (" + p.getTypeAsString() + ")";
                     break;
@@ -103,8 +111,9 @@ public class ArchitectureReviewEngine {
                 int endLine = method.getEnd().map(p -> p.line).orElse(0);
                 String snippet = method.getDeclarationAsString();
 
+                String entityDesc = returnsEntity ? cleanTypeName(returnType) : cleanTypeName(paramName);
                 String detail = returnsEntity
-                        ? "Endpoint returns internal database entity [" + returnType + "]"
+                        ? "Endpoint returns internal database entity [" + entityDesc + "]"
                         : "Endpoint accepts internal database entity parameter [" + paramName + "]";
 
                 String rationale = "Exposing database persistence entities in @RestController endpoints leaks internal schema details, causes tight coupling between API contracts and database models, and exposes the application to mass-assignment / over-posting vulnerabilities.";
@@ -276,27 +285,171 @@ public class ArchitectureReviewEngine {
         return findings;
     }
 
-    private boolean isEntityType(String typeName, InspectedSource source) {
+    public boolean isEntityType(String typeName, InspectedSource source) {
+        return isEntityType(typeName, source, List.of(source));
+    }
+
+    public boolean isEntityType(String typeName, InspectedSource source, List<InspectedSource> allSources) {
         if (typeName == null || typeName.isBlank()) {
             return false;
         }
-        String cleanType = typeName.replace("List<", "")
-                .replace("Set<", "")
-                .replace("Collection<", "")
-                .replace("ResponseEntity<", "")
-                .replace("Optional<", "")
-                .replace(">", "")
-                .trim();
+        String cleanType = cleanTypeName(typeName);
+        if (cleanType.isBlank()) {
+            return false;
+        }
 
+        // 1. Authoritative cross-file JPA @Entity resolution against all project sources
+        if (allSources != null && !allSources.isEmpty()) {
+            Boolean resolvedEntity = resolveCrossFileJpaEntity(cleanType, source, allSources);
+            if (resolvedEntity != null && resolvedEntity) {
+                return true;
+            }
+        }
+
+        // 2. Existing *Entity naming heuristic fallback (preserves benchmark and standalone file behavior)
         if (cleanType.endsWith("Entity")) {
             return true;
         }
 
-        // Check imports for javax.persistence.Entity or jakarta.persistence.Entity
-        boolean hasEntityImport = source.getImports().stream()
+        // 3. Fallback: single-file heuristic checking persistence import and entity in class name
+        boolean hasEntityImport = source != null && source.getImports() != null && source.getImports().stream()
                 .anyMatch(i -> i.endsWith("Entity") || i.contains("persistence.Entity"));
 
         return hasEntityImport && cleanType.toLowerCase().contains("entity");
+    }
+
+    private String cleanTypeName(String typeName) {
+        if (typeName == null) return "";
+        String clean = typeName;
+        clean = clean.replace("List<", "")
+                .replace("Set<", "")
+                .replace("Collection<", "")
+                .replace("Iterable<", "")
+                .replace("ResponseEntity<", "")
+                .replace("Optional<", "")
+                .replace(">", "")
+                .replace("[]", "")
+                .trim();
+        if (clean.contains("<") && clean.endsWith(">")) {
+            clean = clean.substring(clean.indexOf('<') + 1, clean.lastIndexOf('>')).trim();
+        }
+        return clean;
+    }
+
+    private Boolean resolveCrossFileJpaEntity(String cleanType, InspectedSource source, List<InspectedSource> allSources) {
+        String simpleName = cleanType.contains(".") ? cleanType.substring(cleanType.lastIndexOf('.') + 1) : cleanType;
+        String explicitFqcn = cleanType.contains(".") ? cleanType : findImportedFqcn(simpleName, source);
+
+        // A. If an explicit FQCN is known (from import or qualified type), find exact match
+        if (explicitFqcn != null) {
+            for (InspectedSource candidate : allSources) {
+                if (matchesFqcn(candidate, simpleName, explicitFqcn)) {
+                    return hasJpaEntityAnnotation(candidate, simpleName);
+                }
+            }
+        }
+
+        // B. Check same package as controller source
+        if (source != null && source.getPackageName() != null && !source.getPackageName().isBlank()) {
+            String samePkg = source.getPackageName();
+            for (InspectedSource candidate : allSources) {
+                if (samePkg.equals(candidate.getPackageName()) && matchesSimpleName(candidate, simpleName)) {
+                    return hasJpaEntityAnnotation(candidate, simpleName);
+                }
+            }
+        }
+
+        // C. Match candidates by simple name across allSources
+        List<InspectedSource> nameMatches = new ArrayList<>();
+        for (InspectedSource candidate : allSources) {
+            if (matchesSimpleName(candidate, simpleName)) {
+                nameMatches.add(candidate);
+            }
+        }
+
+        if (nameMatches.size() == 1) {
+            return hasJpaEntityAnnotation(nameMatches.get(0), simpleName);
+        } else if (nameMatches.size() > 1) {
+            // Disambiguation: if source imports a package containing one of the candidates, choose it
+            for (InspectedSource match : nameMatches) {
+                if (isPackageImported(match.getPackageName(), source)) {
+                    return hasJpaEntityAnnotation(match, simpleName);
+                }
+            }
+            // If any matching class is an @Entity, check if it has entity annotation
+            for (InspectedSource match : nameMatches) {
+                if (hasJpaEntityAnnotation(match, simpleName)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        return null;
+    }
+
+    private String findImportedFqcn(String simpleName, InspectedSource source) {
+        if (source == null || source.getImports() == null) {
+            return null;
+        }
+        for (String imp : source.getImports()) {
+            if (imp.endsWith("." + simpleName)) {
+                return imp;
+            }
+        }
+        return null;
+    }
+
+    private boolean matchesFqcn(InspectedSource candidate, String simpleName, String fqcn) {
+        if (candidate == null) return false;
+        String candidatePkg = candidate.getPackageName() != null ? candidate.getPackageName() : "";
+        String fullClass = candidatePkg.isEmpty() ? simpleName : candidatePkg + "." + simpleName;
+        if (fullClass.equals(fqcn)) {
+            return true;
+        }
+        String primaryFqcn = candidatePkg.isEmpty()
+                ? candidate.getPrimaryClassName()
+                : candidatePkg + "." + candidate.getPrimaryClassName();
+        return primaryFqcn.equals(fqcn) && matchesSimpleName(candidate, simpleName);
+    }
+
+    private boolean matchesSimpleName(InspectedSource candidate, String simpleName) {
+        if (candidate == null || simpleName == null) return false;
+        if (simpleName.equals(candidate.getPrimaryClassName())) {
+            return true;
+        }
+        return candidate.getClassDeclarations().stream()
+                .anyMatch(c -> simpleName.equals(c.getNameAsString()));
+    }
+
+    private boolean isPackageImported(String packageName, InspectedSource source) {
+        if (packageName == null || source == null || source.getImports() == null) {
+            return false;
+        }
+        return source.getImports().contains(packageName + ".*");
+    }
+
+    private boolean hasJpaEntityAnnotation(InspectedSource candidate, String simpleName) {
+        if (candidate == null) return false;
+        for (ClassOrInterfaceDeclaration clazz : candidate.getClassDeclarations()) {
+            if (simpleName.equals(clazz.getNameAsString())) {
+                for (AnnotationExpr annotation : clazz.getAnnotations()) {
+                    String annName = annotation.getNameAsString();
+                    if ("Entity".equals(annName)) {
+                        boolean hasConflictingImport = candidate.getImports().stream()
+                                .anyMatch(i -> i.endsWith(".Entity")
+                                        && !i.startsWith("jakarta.persistence")
+                                        && !i.startsWith("javax.persistence"));
+                        if (!hasConflictingImport) {
+                            return true;
+                        }
+                    } else if ("jakarta.persistence.Entity".equals(annName) || "javax.persistence.Entity".equals(annName)) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
     }
 
     private Set<String> extractReferencedClasses(InspectedSource source) {

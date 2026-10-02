@@ -197,3 +197,52 @@ Based on the empirical findings of `REAL-REPO-001`, the following backlog enhanc
 
 3. **CORS Validation Hardening:**
    `FrameworkContextAnalyzer` performed as designed by ignoring `http://localhost:63342`. As an optional informational check, consider adding a low-severity hygiene notice when non-production localhost origins are hardcoded in controller annotations.
+
+---
+
+## 8. Phase 4A.5 Post-Fix Validation & Metric Shift
+
+Following the root-cause reproduction in Phase 4A.3 and implementation of cross-file JPA entity resolution in Phase 4A.4 (`ArchitectureReviewEngine.java`), a re-validation was conducted against `darshanrathod04/Todo-Application` at the identical pinned commit (`bb4b69a50ee814d00129fdbe2286eeaa048a078f`).
+
+### 8.1 Re-Validation Parameters
+- **Target Repository:** `darshanrathod04/Todo-Application`
+- **Pinned Commit SHA:** `bb4b69a50ee814d00129fdbe2286eeaa048a078f`
+- **Validation Timestamp:** `2026-10-02T17:47:00Z`
+- **Execution Command:**
+  ```bash
+  mvn exec:java -Dexec.mainClass="com.sentinelpr.cli.SentinelCliRunner" \
+    -Dexec.args="<scratch-path>/Todo-Application --format json"
+  ```
+- **Engine Status:** `SUCCESS` (Exit code: 0)
+- **Scanned Files:** 6 compilation units
+
+### 8.2 Re-Validation Audit Findings
+The engine successfully identified 3 endpoint-level findings under rule `ARCH-002-LEAKY-ABSTRACTION` (`ARCH_LEAKY_ABSTRACTION`), all located in `TaskController.java`:
+
+| Finding ID | Endpoint Method | Line Range | Vulnerable Construct | Identified Entity | Rationale |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `FND-da1d5a21` | `addtask` | 18–21 | `public Task addtask(@RequestBody Task task)` | `Task` | Direct JPA entity accepted in request body and returned in response |
+| `FND-4e31f14a` | `getTasks` | 23–26 | `public List<Task> getTasks()` | `Task` | Direct JPA entity collection returned without DTO abstraction |
+| `FND-4eeba82e` | `updateTask` | 28–31 | `public Task updateTask(@PathVariable Long id, @RequestBody Task taskDetails)` | `Task` | Direct JPA entity accepted in request body and returned in response |
+
+All findings accurately reported the entity type evidence:
+`"description" : "Leaky abstraction: Endpoint returns internal database entity [Task] without DTO encapsulation"`
+
+### 8.3 Non-Triggered Rules Verification
+All other 12 rules (SEC-001 through SEC-010, ARCH-001, and ARCH-003) were evaluated across the 6 compilation units and produced zero spurious findings, maintaining 100% precision across safe patterns.
+
+### 8.4 Before vs. After Metric Comparison
+
+| Rule Evaluation Category | Pre-Fix Baseline (Phase 4A.2) | Post-Fix Validation (Phase 4A.5) | Metric Shift |
+| :--- | :--- | :--- | :--- |
+| **True Positives (`TP`)** | 0 | 1 (`ARCH-002`) | **+1** |
+| **False Positives (`FP`)** | 0 | 0 | **0** |
+| **False Negatives (`FN`)** | 1 (`ARCH-002`) | 0 | **-1** |
+| **True Negatives (`TN`)** | 12 (All other rules) | 12 (All other rules) | **0** |
+| **Uncertain (`UNCERTAIN`)** | 0 | 0 | **0** |
+| **Total Rules Evaluated** | 13 | 13 | 0 |
+
+### 8.5 Observation Records & Historical Audit Trail
+In accordance with audit integrity requirements, the initial false negative observation is preserved:
+- **Historical FN Observation:** [`phase4/observations/REAL-REPO-001/OBS-0001-ARCH-002-FN.json`](file:///d:/sentinel-pr/phase4/observations/REAL-REPO-001/OBS-0001-ARCH-002-FN.json)
+- **Post-Fix Validation Observation:** [`phase4/observations/REAL-REPO-001/OBS-0002-ARCH-002-FIX-VALIDATION.json`](file:///d:/sentinel-pr/phase4/observations/REAL-REPO-001/OBS-0002-ARCH-002-FIX-VALIDATION.json)
