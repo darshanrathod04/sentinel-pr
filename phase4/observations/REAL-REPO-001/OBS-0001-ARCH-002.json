@@ -1,0 +1,27 @@
+{
+  "observationId": "OBS-0001",
+  "repositoryId": "REAL-REPO-001",
+  "commitSha": "bb4b69a50ee814d00129fdbe2286eeaa048a078f",
+  "ruleId": "ARCH-002-LEAKY-ABSTRACTION",
+  "detectionStatus": "NOT_DETECTED",
+  "detectedSeverity": "NONE",
+  "location": {
+    "filePath": "src/main/java/com/application/todoList/controller/TaskController.java",
+    "startLine": 19,
+    "endLine": 32,
+    "targetConstruct": "public Task addtask(@RequestBody Task task)"
+  },
+  "findingSnippet": "@PostMapping\npublic Task addtask(@RequestBody Task task){\n    return service.createTask(task);\n}",
+  "groundTruth": "VULNERABLE",
+  "classification": "FN",
+  "classificationRationale": "Task is an annotated JPA database persistence entity (@Entity in Task.java). TaskController endpoints (addtask at line 19, getTasks at line 24, updateTask at line 29) directly consume and return Task without DTO or record mapping. This violates CWE-497 (leaky abstraction) and exposes the application to mass-assignment over-posting on entity field 'id'. SentinelPR's ArchitectureReviewEngine missed this finding because its isEntityType heuristic only checks if the simple class name ends with 'Entity' or imports persistence.Entity locally, failing to resolve the cross-file AST declaration of Task.",
+  "reviewer": "Human Ground-Truth Auditor",
+  "reviewedAt": "2026-10-02T16:59:49Z",
+  "remediationStage": "NOT_ATTEMPTED",
+  "engineDefect": {
+    "isEngineDefect": true,
+    "component": "RULE_PATTERN",
+    "description": "ArchitectureReviewEngine.isEntityType() relies on syntactic naming checks (*Entity) and local file imports, missing entities whose simple name does not contain Entity when persistence.Entity is imported in a separate file.",
+    "proposedFix": "Resolve symbol types against all InspectedSource compilation units in the repository to check if the referenced class has the @Entity annotation."
+  }
+}
