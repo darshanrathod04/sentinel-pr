@@ -3,6 +3,9 @@ package com.sentinelpr.core.remediation;
 import com.github.javaparser.JavaParser;
 import com.github.javaparser.ParserConfiguration;
 import com.github.javaparser.ast.CompilationUnit;
+import com.github.javaparser.ast.body.MethodDeclaration;
+import com.github.javaparser.ast.body.Parameter;
+import com.github.javaparser.ast.body.VariableDeclarator;
 import com.sentinelpr.core.model.InspectedSource;
 import com.sentinelpr.core.model.SecurityFinding;
 import com.sentinelpr.core.model.SecurityRule;
@@ -45,8 +48,12 @@ public class PathTraversalRemediationStrategy implements RemediationStrategy {
                 String fileVar = mFile.group(1);
                 String baseVar = mFile.group(2);
                 String fileArg = mFile.group(3);
+                String baseType = resolveVariableType(inspectedSource, finding, baseVar);
+                String baseToPath = "String".equals(baseType)
+                        ? "Path.of(" + baseVar + ").normalize()"
+                        : baseVar + ".toPath().normalize()";
                 String replacement = indent + "File " + fileVar + " = new File(" + baseVar + ", " + fileArg + ").getCanonicalFile();\n"
-                        + indent + "if (!" + fileVar + ".toPath().startsWith(" + baseVar + ".toPath().normalize())) {\n"
+                        + indent + "if (!" + fileVar + ".toPath().startsWith(" + baseToPath + ")) {\n"
                         + indent + "    throw new SecurityException(\"Path traversal attempt detected\");\n"
                         + indent + "}";
                 lines[targetIdx] = replacement;
@@ -63,8 +70,15 @@ public class PathTraversalRemediationStrategy implements RemediationStrategy {
                 String pathVar = mPath.group(1);
                 String baseVar = mPath.group(2);
                 String pathArg = mPath.group(3);
+                String baseType = resolveVariableType(inspectedSource, finding, baseVar);
+                String normalizedBaseExpr = "Path".equals(baseType)
+                        ? baseVar + ".normalize()"
+                        : "File".equals(baseType)
+                        ? baseVar + ".toPath().normalize()"
+                        : "Path.of(" + baseVar + ").normalize()";
+
                 String replacement = indent + "Path " + pathVar + " = Path.of(" + baseVar + ".toString(), " + pathArg + ").normalize();\n"
-                        + indent + "if (!" + pathVar + ".startsWith(" + baseVar + ".normalize())) {\n"
+                        + indent + "if (!" + pathVar + ".startsWith(" + normalizedBaseExpr + ")) {\n"
                         + indent + "    throw new SecurityException(\"Path traversal attempt detected\");\n"
                         + indent + "}";
                 lines[targetIdx] = replacement;
@@ -103,5 +117,24 @@ public class PathTraversalRemediationStrategy implements RemediationStrategy {
         } catch (Exception e) {
             return false;
         }
+    }
+
+    private String resolveVariableType(InspectedSource inspectedSource, SecurityFinding finding, String varName) {
+        if (inspectedSource == null || varName == null) return "unknown";
+        for (MethodDeclaration method : inspectedSource.getMethods()) {
+            if (finding == null || finding.getMethodName() == null || method.getNameAsString().equals(finding.getMethodName())) {
+                for (Parameter p : method.getParameters()) {
+                    if (p.getNameAsString().equals(varName)) {
+                        return p.getTypeAsString();
+                    }
+                }
+                for (VariableDeclarator vd : method.findAll(VariableDeclarator.class)) {
+                    if (vd.getNameAsString().equals(varName)) {
+                        return vd.getTypeAsString();
+                    }
+                }
+            }
+        }
+        return "unknown";
     }
 }

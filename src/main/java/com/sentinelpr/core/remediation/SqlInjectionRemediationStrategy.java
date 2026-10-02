@@ -2,13 +2,20 @@ package com.sentinelpr.core.remediation;
 
 import com.github.javaparser.JavaParser;
 import com.github.javaparser.ParserConfiguration;
+import com.github.javaparser.Range;
 import com.github.javaparser.ast.CompilationUnit;
+import com.github.javaparser.ast.body.VariableDeclarator;
+import com.github.javaparser.ast.expr.BinaryExpr;
+import com.github.javaparser.ast.expr.Expression;
+import com.github.javaparser.ast.expr.MethodCallExpr;
+import com.github.javaparser.ast.stmt.ExpressionStmt;
 import com.sentinelpr.core.model.InspectedSource;
 import com.sentinelpr.core.model.SecurityFinding;
 import com.sentinelpr.core.model.SecurityRule;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -89,7 +96,55 @@ public class SqlInjectionRemediationStrategy implements RemediationStrategy {
         // Ensure PreparedStatement is imported
         patched = ensurePreparedStatementImport(patched);
 
-        // Pattern: Match SQL concatenation in variable declaration: String <varName> = "SELECT ... " + <param> ... ;
+        // 1. Try AST-based extraction of SQL variable declaration
+        Optional<CompilationUnit> cuOpt = javaParser.parse(patched).getResult();
+        if (cuOpt.isPresent()) {
+            CompilationUnit cu = cuOpt.get();
+            for (VariableDeclarator vd : cu.findAll(VariableDeclarator.class)) {
+                if ("String".equals(vd.getTypeAsString()) && vd.getInitializer().isPresent()) {
+                    Expression init = vd.getInitializer().get();
+                    if (init instanceof BinaryExpr binary && binary.getOperator() == BinaryExpr.Operator.PLUS) {
+                        List<Expression> operands = new ArrayList<>();
+                        collectPlusOperands(binary, operands);
+
+                        boolean hasSqlKeyword = operands.stream()
+                                .filter(Expression::isStringLiteralExpr)
+                                .anyMatch(op -> {
+                                    String val = op.asStringLiteralExpr().getValue().trim().toUpperCase(Locale.ROOT);
+                                    return val.startsWith("SELECT") || val.startsWith("UPDATE") || val.startsWith("INSERT")
+                                            || val.startsWith("DELETE") || val.startsWith("MERGE");
+                                });
+
+                        if (hasSqlKeyword && vd.findAncestor(ExpressionStmt.class).isPresent()) {
+                            ExpressionStmt exprStmt = vd.findAncestor(ExpressionStmt.class).get();
+                            if (exprStmt.getRange().isPresent()) {
+                                Range range = exprStmt.getRange().get();
+                                String varName = vd.getNameAsString();
+                                int searchStart = getLineStartOffset(patched, range.begin.line);
+                                int declStart = patched.indexOf("String " + varName, searchStart);
+                                int endLineOffset = getLineStartOffset(patched, range.end.line);
+                                int declEnd = patched.indexOf(";", endLineOffset);
+
+                                if (declStart != -1 && declEnd != -1 && declEnd >= declStart) {
+                                    String fullVarDecl = patched.substring(declStart, declEnd + 1);
+                                    ExtractedSqlParams extracted = extractFromOperands(operands);
+                                    if (extracted != null && !extracted.params().isEmpty()) {
+                                        Optional<String> res = applyPreparedStatementTransform(
+                                                patched, fullVarDecl, varName, extracted
+                                        );
+                                        if (res.isPresent() && isValidJava(res.get())) {
+                                            return res;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Pattern A fallback: Match SQL concatenation in variable declaration via regex
         Pattern sqlVarDeclPattern = Pattern.compile(
                 "(String\\s+([a-zA-Z0-9_]+)\\s*=\\s*)(\"\\s*(?:SELECT|UPDATE|INSERT|DELETE)\\s+[^\"]+?['\"]?\\s*\\+\\s*[a-zA-Z0-9_.]+(?:\\s*\\+[\\s\\S]*?)?)(;)"
         );
@@ -102,112 +157,11 @@ public class SqlInjectionRemediationStrategy implements RemediationStrategy {
 
             ExtractedSqlParams extracted = extractSqlAndParams(concatExpr);
             if (extracted != null && !extracted.params().isEmpty()) {
-                String parameterizedSql = extracted.parameterizedSql();
-                List<String> params = extracted.params();
-
-                // Look for Statement declaration in the method: Statement stmt = conn.createStatement();
-                Pattern stmtPattern = Pattern.compile(
-                        "(Statement\\s+([a-zA-Z0-9_]+)\\s*=\\s*([a-zA-Z0-9_]+)\\.createStatement\\(\\);)"
+                Optional<String> res = applyPreparedStatementTransform(
+                        patched, fullVarDecl, varName, extracted
                 );
-                Matcher stmtMatcher = stmtPattern.matcher(patched);
-
-                if (stmtMatcher.find()) {
-                    String fullStmtDecl = stmtMatcher.group(0);
-                    String stmtVar = stmtMatcher.group(2);
-                    String connVar = stmtMatcher.group(3);
-                    String psVar = stmtVar;
-
-                    // Determine indentation
-                    String indent = extractIndentAtMatch(patched, stmtMatcher.start());
-
-                    // Parameter binding code with type safety (setString for String, setObject for others)
-                    StringBuilder bindings = new StringBuilder();
-                    for (int i = 0; i < params.size(); i++) {
-                        String p = params.get(i);
-                        String setter = isStringType(patched, p) ? "setString" : "setObject";
-                        bindings.append("\n").append(indent).append(psVar).append(".").append(setter).append("(").append(i + 1).append(", ").append(p).append(");");
-                    }
-
-                    // Check relative positions of stmt and sqlVar
-                    boolean stmtBeforeSql = stmtMatcher.start() < sqlVarMatcher.start();
-
-                    if (stmtBeforeSql) {
-                        int stmtEnd = patched.indexOf(fullStmtDecl) + fullStmtDecl.length();
-                        int sqlStart = patched.indexOf(fullVarDecl);
-                        if (sqlStart >= stmtEnd) {
-                            String between = patched.substring(stmtEnd, sqlStart);
-                            if (isWhitespaceOrCommentsOnly(between)) {
-                                // Combined contiguous replacement is safe when between is only whitespace or comments
-                                String toReplace = fullStmtDecl + between + fullVarDecl;
-                                String replacement = "PreparedStatement " + psVar + " = " + connVar + ".prepareStatement(\n"
-                                        + indent + "    \"" + parameterizedSql + "\"\n"
-                                        + indent + ");"
-                                        + bindings.toString();
-
-                                String candidate = patched.replace(toReplace, replacement);
-                                candidate = replaceExecutionCalls(candidate, stmtVar, varName, psVar);
-                                if (isValidJava(candidate)) {
-                                    return Optional.of(candidate);
-                                }
-                            } else {
-                                // H-1 SAFETY: Intervening code exists between Statement and SQL declaration!
-                                // DO NOT combine. Transform Statement declaration independently and SQL variable independently.
-                                String candidate = patched;
-                                // Remove the raw Statement creation
-                                candidate = candidate.replace(fullStmtDecl, "");
-                                // Synthesize PreparedStatement creation right at the SQL variable declaration location
-                                String newSqlAndPsDecl = "String " + varName + " = \"" + parameterizedSql + "\";\n"
-                                        + indent + "PreparedStatement " + psVar + " = " + connVar + ".prepareStatement(" + varName + ");"
-                                        + bindings.toString();
-                                candidate = candidate.replace(fullVarDecl, newSqlAndPsDecl);
-                                candidate = replaceExecutionCalls(candidate, stmtVar, varName, psVar);
-                                if (isValidJava(candidate)) {
-                                    return Optional.of(candidate);
-                                }
-                            }
-                        }
-
-                        // Alternative independent substitution
-                        String candidate = patched.replace(fullVarDecl, "String " + varName + " = \"" + parameterizedSql + "\";");
-                        candidate = candidate.replace(fullStmtDecl, "PreparedStatement " + psVar + " = " + connVar + ".prepareStatement(" + varName + ");" + bindings.toString());
-                        candidate = replaceExecutionCalls(candidate, stmtVar, varName, psVar);
-                        if (isValidJava(candidate)) {
-                            return Optional.of(candidate);
-                        }
-                    } else {
-                        // SQL variable is before Statement declaration
-                        int sqlEnd = patched.indexOf(fullVarDecl) + fullVarDecl.length();
-                        int stmtStart = patched.indexOf(fullStmtDecl);
-                        if (stmtStart >= sqlEnd) {
-                            String between = patched.substring(sqlEnd, stmtStart);
-                            if (isWhitespaceOrCommentsOnly(between)) {
-                                String toReplace = fullVarDecl + between + fullStmtDecl;
-                                String inlinedReplacement = "PreparedStatement " + psVar + " = " + connVar + ".prepareStatement(\"" + parameterizedSql + "\");" + bindings.toString();
-                                String candidate = patched.replace(toReplace, inlinedReplacement);
-                                candidate = replaceExecutionCalls(candidate, stmtVar, varName, psVar);
-                                if (isValidJava(candidate)) {
-                                    return Optional.of(candidate);
-                                }
-                            } else {
-                                // H-1 SAFETY: Intervening code exists. Transform independently:
-                                String candidate = patched;
-                                candidate = candidate.replace(fullVarDecl, "String " + varName + " = \"" + parameterizedSql + "\";");
-                                candidate = candidate.replace(fullStmtDecl, "PreparedStatement " + psVar + " = " + connVar + ".prepareStatement(" + varName + ");" + bindings.toString());
-                                candidate = replaceExecutionCalls(candidate, stmtVar, varName, psVar);
-                                if (isValidJava(candidate)) {
-                                    return Optional.of(candidate);
-                                }
-                            }
-                        }
-
-                        // Alternative independent substitution
-                        String candidate = patched.replace(fullVarDecl, "String " + varName + " = \"" + parameterizedSql + "\";");
-                        candidate = candidate.replace(fullStmtDecl, "PreparedStatement " + psVar + " = " + connVar + ".prepareStatement(" + varName + ");" + bindings.toString());
-                        candidate = replaceExecutionCalls(candidate, stmtVar, varName, psVar);
-                        if (isValidJava(candidate)) {
-                            return Optional.of(candidate);
-                        }
-                    }
+                if (res.isPresent() && isValidJava(res.get())) {
+                    return res;
                 }
             }
         }
@@ -306,11 +260,184 @@ public class SqlInjectionRemediationStrategy implements RemediationStrategy {
     private boolean isStringType(String source, String param) {
         if (param == null || param.isBlank()) return false;
         String cleanParam = param.trim();
-        if (cleanParam.endsWith(".toString()") || cleanParam.startsWith("String.valueOf(")) {
+        if (cleanParam.endsWith(".toString()") || cleanParam.startsWith("String.valueOf(") || cleanParam.contains(".trim()")) {
+            return true;
+        }
+        if (cleanParam.startsWith("(") && cleanParam.endsWith(")")) {
+            cleanParam = cleanParam.substring(1, cleanParam.length() - 1).trim();
+        }
+        if (cleanParam.contains("\"")) {
             return true;
         }
         Pattern stringDecl = Pattern.compile("\\bString\\s+" + Pattern.quote(cleanParam) + "\\b");
-        return stringDecl.matcher(source).find();
+        if (stringDecl.matcher(source).find()) return true;
+        Pattern paramPattern = Pattern.compile("\\bString\\s+" + Pattern.quote(cleanParam) + "[,\\)]");
+        return paramPattern.matcher(source).find();
+    }
+
+    private Optional<String> applyPreparedStatementTransform(
+            String patched,
+            String fullVarDecl,
+            String varName,
+            ExtractedSqlParams extracted
+    ) {
+        String parameterizedSql = extracted.parameterizedSql();
+        List<String> params = extracted.params();
+
+        // Look for Statement declaration in the method: Statement stmt = conn.createStatement();
+        Pattern stmtPattern = Pattern.compile(
+                "(Statement\\s+([a-zA-Z0-9_]+)\\s*=\\s*([a-zA-Z0-9_]+)\\.createStatement\\(\\);)"
+        );
+        Matcher stmtMatcher = stmtPattern.matcher(patched);
+
+        if (!stmtMatcher.find()) {
+            return Optional.empty();
+        }
+
+        String fullStmtDecl = stmtMatcher.group(0);
+        String stmtVar = stmtMatcher.group(2);
+        String connVar = stmtMatcher.group(3);
+        String psVar = stmtVar;
+
+        // Determine indentation
+        String indent = extractIndentAtMatch(patched, stmtMatcher.start());
+
+        // Parameter binding code with type safety
+        StringBuilder bindings = new StringBuilder();
+        for (int i = 0; i < params.size(); i++) {
+            String p = params.get(i);
+            String setter = isStringType(patched, p) ? "setString" : "setObject";
+            bindings.append("\n").append(indent).append(psVar).append(".").append(setter).append("(").append(i + 1).append(", ").append(p).append(");");
+        }
+
+        int stmtStart = stmtMatcher.start();
+        int sqlStart = patched.indexOf(fullVarDecl);
+        if (sqlStart == -1) {
+            return Optional.empty();
+        }
+
+        boolean stmtBeforeSql = stmtStart < sqlStart;
+
+        if (stmtBeforeSql) {
+            int stmtEnd = stmtStart + fullStmtDecl.length();
+            if (sqlStart >= stmtEnd) {
+                String between = patched.substring(stmtEnd, sqlStart);
+                if (isWhitespaceOrCommentsOnly(between)) {
+                    String toReplace = fullStmtDecl + between + fullVarDecl;
+                    String replacement = "PreparedStatement " + psVar + " = " + connVar + ".prepareStatement(\n"
+                            + indent + "    \"" + parameterizedSql + "\"\n"
+                            + indent + ");"
+                            + bindings.toString();
+
+                    String candidate = patched.replace(toReplace, replacement);
+                    candidate = replaceExecutionCalls(candidate, stmtVar, varName, psVar);
+                    if (isValidJava(candidate)) {
+                        return Optional.of(candidate);
+                    }
+                } else {
+                    // H-1 SAFETY: Intervening code exists
+                    String candidate = patched;
+                    candidate = candidate.replace(fullStmtDecl, "");
+                    String newSqlAndPsDecl = "String " + varName + " = \"" + parameterizedSql + "\";\n"
+                            + indent + "PreparedStatement " + psVar + " = " + connVar + ".prepareStatement(" + varName + ");"
+                            + bindings.toString();
+                    candidate = candidate.replace(fullVarDecl, newSqlAndPsDecl);
+                    candidate = replaceExecutionCalls(candidate, stmtVar, varName, psVar);
+                    if (isValidJava(candidate)) {
+                        return Optional.of(candidate);
+                    }
+                }
+            }
+
+            // Alternative independent substitution
+            String candidate = patched.replace(fullVarDecl, "String " + varName + " = \"" + parameterizedSql + "\";");
+            candidate = candidate.replace(fullStmtDecl, "PreparedStatement " + psVar + " = " + connVar + ".prepareStatement(" + varName + ");" + bindings.toString());
+            candidate = replaceExecutionCalls(candidate, stmtVar, varName, psVar);
+            if (isValidJava(candidate)) {
+                return Optional.of(candidate);
+            }
+        } else {
+            // SQL variable is before Statement declaration
+            int sqlEnd = sqlStart + fullVarDecl.length();
+            if (stmtStart >= sqlEnd) {
+                String between = patched.substring(sqlEnd, stmtStart);
+                if (isWhitespaceOrCommentsOnly(between)) {
+                    String toReplace = fullVarDecl + between + fullStmtDecl;
+                    String inlinedReplacement = "PreparedStatement " + psVar + " = " + connVar + ".prepareStatement(\"" + parameterizedSql + "\");" + bindings.toString();
+                    String candidate = patched.replace(toReplace, inlinedReplacement);
+                    candidate = replaceExecutionCalls(candidate, stmtVar, varName, psVar);
+                    if (isValidJava(candidate)) {
+                        return Optional.of(candidate);
+                    }
+                } else {
+                    // H-1 SAFETY: Intervening code exists
+                    String candidate = patched;
+                    candidate = candidate.replace(fullVarDecl, "String " + varName + " = \"" + parameterizedSql + "\";");
+                    candidate = candidate.replace(fullStmtDecl, "PreparedStatement " + psVar + " = " + connVar + ".prepareStatement(" + varName + ");" + bindings.toString());
+                    candidate = replaceExecutionCalls(candidate, stmtVar, varName, psVar);
+                    if (isValidJava(candidate)) {
+                        return Optional.of(candidate);
+                    }
+                }
+            }
+
+            // Alternative independent substitution
+            String candidate = patched.replace(fullVarDecl, "String " + varName + " = \"" + parameterizedSql + "\";");
+            candidate = candidate.replace(fullStmtDecl, "PreparedStatement " + psVar + " = " + connVar + ".prepareStatement(" + varName + ");" + bindings.toString());
+            candidate = replaceExecutionCalls(candidate, stmtVar, varName, psVar);
+            if (isValidJava(candidate)) {
+                return Optional.of(candidate);
+            }
+        }
+
+        return Optional.empty();
+    }
+
+    private void collectPlusOperands(Expression expr, List<Expression> operands) {
+        if (expr instanceof BinaryExpr binary && binary.getOperator() == BinaryExpr.Operator.PLUS) {
+            collectPlusOperands(binary.getLeft(), operands);
+            collectPlusOperands(binary.getRight(), operands);
+        } else {
+            operands.add(expr);
+        }
+    }
+
+    private ExtractedSqlParams extractFromOperands(List<Expression> operands) {
+        StringBuilder sqlBuilder = new StringBuilder();
+        List<String> params = new ArrayList<>();
+
+        for (int i = 0; i < operands.size(); i++) {
+            Expression op = operands.get(i);
+            if (op.isStringLiteralExpr()) {
+                String text = op.asStringLiteralExpr().getValue();
+                boolean nextIsParam = (i + 1 < operands.size()) && !operands.get(i + 1).isStringLiteralExpr();
+                if (nextIsParam && text.endsWith("'")) {
+                    text = text.substring(0, text.length() - 1);
+                }
+                boolean prevIsParam = (i - 1 >= 0) && !operands.get(i - 1).isStringLiteralExpr();
+                if (prevIsParam && text.startsWith("'")) {
+                    text = text.substring(1);
+                }
+                sqlBuilder.append(text);
+            } else {
+                params.add(op.toString());
+                sqlBuilder.append("?");
+            }
+        }
+
+        return new ExtractedSqlParams(sqlBuilder.toString().trim(), params);
+    }
+
+    private int getLineStartOffset(String text, int lineNum) {
+        int curLine = 1;
+        int idx = 0;
+        while (idx < text.length() && curLine < lineNum) {
+            if (text.charAt(idx) == '\n') {
+                curLine++;
+            }
+            idx++;
+        }
+        return idx;
     }
 
     private record ExtractedSqlParams(String parameterizedSql, List<String> params) {}
@@ -362,6 +489,7 @@ public class SqlInjectionRemediationStrategy implements RemediationStrategy {
         StringBuilder current = new StringBuilder();
         boolean inQuotes = false;
         boolean escaped = false;
+        int parenDepth = 0;
 
         for (int i = 0; i < expr.length(); i++) {
             char c = expr.charAt(i);
@@ -380,7 +508,11 @@ public class SqlInjectionRemediationStrategy implements RemediationStrategy {
                 current.append(c);
                 continue;
             }
-            if (c == '+' && !inQuotes) {
+            if (!inQuotes) {
+                if (c == '(') parenDepth++;
+                else if (c == ')') parenDepth = Math.max(0, parenDepth - 1);
+            }
+            if (c == '+' && !inQuotes && parenDepth == 0) {
                 tokens.add(current.toString().trim());
                 current.setLength(0);
                 continue;

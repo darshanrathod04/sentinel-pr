@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SentinelBenchmarkCase",
+  "type": "object",
+  "required": [
+    "caseId",
+    "ruleId",
+    "caseType",
+    "description",
+    "fixturePaths",
+    "primaryFixturePath",
+    "groundTruth",
+    "compilationExpectation"
+  ],
+  "properties": {
+    "caseId": {
+      "type": "string",
+      "pattern": "^TC-(SEC|ARCH)[0-9]{3}-(V|S)[0-9]{2}$",
+      "description": "Unique identifier e.g. TC-SEC001-V01 or TC-SEC001-S01"
+    },
+    "ruleId": {
+      "type": "string",
+      "enum": [
+        "SEC-001-FAIL-OPEN",
+        "SEC-002-UNCLOSED-STREAM",
+        "SEC-003-VOLATILE-COMPOUND",
+        "SEC-004-UNISOLATED-SUBPROCESS",
+        "SEC-005-SQL-INJECTION",
+        "SEC-006-PATH-TRAVERSAL",
+        "SEC-007-INSECURE-DESERIALIZATION",
+        "SEC-008-HARDCODED-SECRET",
+        "SEC-009-SPRING-SECURITY-CSRF-DISABLED",
+        "SEC-010-SPRING-PERMISSIVE-CORS",
+        "ARCH-001-CYCLIC-DEPENDENCY",
+        "ARCH-002-LEAKY-ABSTRACTION",
+        "ARCH-003-NON-DETERMINISTIC-CALLS"
+      ]
+    },
+    "caseType": {
+      "type": "string",
+      "enum": ["VULNERABLE", "SAFE"]
+    },
+    "description": {
+      "type": "string"
+    },
+    "fixturePaths": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1
+    },
+    "primaryFixturePath": {
+      "type": "string"
+    },
+    "groundTruth": {
+      "type": "object",
+      "required": ["expectedFinding", "expectedRemediation"],
+      "properties": {
+        "expectedFinding": {
+          "type": "boolean"
+        },
+        "expectedSeverity": {
+          "type": ["string", "null"],
+          "enum": ["CRITICAL", "HIGH", "MEDIUM", "LOW", null]
+        },
+        "targetConstruct": {
+          "type": ["string", "null"]
+        },
+        "expectedRemediation": {
+          "type": "boolean"
+        },
+        "requiredRemediationTokens": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "forbiddenRemediationTokens": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "compilationExpectation": {
+      "type": "object",
+      "required": ["originalCompiles", "patchedCompiles"],
+      "properties": {
+        "originalCompiles": {
+          "type": "boolean"
+        },
+        "patchedCompiles": {
+          "type": "boolean"
+        },
+        "compilationSkipReason": {
+          "type": ["string", "null"]
+        }
+      }
+    },
+    "notes": {
+      "type": "string"
+    }
+  }
+}
