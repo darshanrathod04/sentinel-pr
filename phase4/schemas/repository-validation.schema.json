@@ -1,0 +1,197 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sentinelpr.io/schemas/phase4/repository-validation.schema.json",
+  "title": "SentinelPR Real Repository Validation Schema",
+  "description": "Defines the structured evaluation record for auditing a real repository with SentinelPR.",
+  "type": "object",
+  "required": [
+    "repositoryId",
+    "repositoryName",
+    "repositoryUrl",
+    "commitSha",
+    "analysisDate",
+    "language",
+    "framework",
+    "sentinelPrVersion",
+    "rulesEvaluated",
+    "findings",
+    "summary"
+  ],
+  "properties": {
+    "repositoryId": {
+      "type": "string",
+      "pattern": "^REAL-REPO-\\d{3,}$",
+      "description": "Unique stable identifier for the repository, e.g., REAL-REPO-001"
+    },
+    "repositoryName": {
+      "type": "string",
+      "description": "Human-readable name of the repository"
+    },
+    "repositoryUrl": {
+      "type": "string",
+      "format": "uri",
+      "description": "Remote repository URL"
+    },
+    "commitSha": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{40}$",
+      "description": "Exact 40-character commit SHA audited"
+    },
+    "analysisDate": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO-8601 UTC timestamp of execution"
+    },
+    "language": {
+      "type": "string",
+      "description": "Primary programming language (e.g. Java)"
+    },
+    "framework": {
+      "type": "string",
+      "description": "Primary framework and version (e.g. Spring Boot 3.4.1)"
+    },
+    "sentinelPrVersion": {
+      "type": "string",
+      "description": "SentinelPR engine version or commit SHA used for the audit"
+    },
+    "rulesEvaluated": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "List of security and engineering rules active during the run"
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/FindingObservation"
+      },
+      "description": "All observations recorded during analysis and ground truth verification"
+    },
+    "summary": {
+      "type": "object",
+      "required": [
+        "totalDetected",
+        "truePositives",
+        "falsePositives",
+        "falseNegatives",
+        "trueNegatives",
+        "uncertain"
+      ],
+      "properties": {
+        "totalDetected": { "type": "integer", "minimum": 0 },
+        "truePositives": { "type": "integer", "minimum": 0 },
+        "falsePositives": { "type": "integer", "minimum": 0 },
+        "falseNegatives": { "type": "integer", "minimum": 0 },
+        "trueNegatives": { "type": "integer", "minimum": 0 },
+        "uncertain": { "type": "integer", "minimum": 0 },
+        "remediationsAttempted": { "type": "integer", "minimum": 0 },
+        "remediationsSuccessful": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Operational notes, environment details, or audit caveats"
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "FindingObservation": {
+      "type": "object",
+      "required": [
+        "observationId",
+        "ruleId",
+        "severity",
+        "file",
+        "line",
+        "findingDescription",
+        "classification",
+        "groundTruthEvidence",
+        "remediationAttempted"
+      ],
+      "properties": {
+        "observationId": {
+          "type": "string",
+          "pattern": "^OBS-\\d{4,}$",
+          "description": "Unique observation identifier, e.g., OBS-0001"
+        },
+        "ruleId": {
+          "type": "string",
+          "description": "SentinelPR security or quality rule ID, e.g., SEC-005-SQLI"
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]
+        },
+        "file": {
+          "type": "string",
+          "description": "Relative file path within repository where finding was reported"
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Line number where the finding was flagged"
+        },
+        "findingDescription": {
+          "type": "string",
+          "description": "Raw description produced by the SentinelPR engine"
+        },
+        "evidence": {
+          "type": "string",
+          "description": "Source code snippet or AST construct associated with finding"
+        },
+        "causalTrace": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Source-to-sink dataflow or call path identified by SentinelPR"
+        },
+        "classification": {
+          "type": "string",
+          "enum": ["TP", "FP", "FN", "TN", "UNCERTAIN"],
+          "description": "Audited outcome classification. Arbitrary values forbidden."
+        },
+        "classificationConfidence": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Reviewer confidence in this classification"
+        },
+        "groundTruthEvidence": {
+          "type": "string",
+          "description": "Detailed explanation and verified proof why this finding is TP, FP, FN, TN, or UNCERTAIN"
+        },
+        "remediationAttempted": {
+          "type": "boolean",
+          "description": "Indicates whether automated patch generation was attempted"
+        },
+        "remediationResult": {
+          "type": "string",
+          "enum": [
+            "NOT_ATTEMPTED",
+            "GENERATED",
+            "APPLIED",
+            "AST_VALID",
+            "COMPILED",
+            "TARGET_REMOVED",
+            "REGRESSION_FREE",
+            "FAILED"
+          ],
+          "description": "Outcome of remediation evaluation"
+        },
+        "regressionResult": {
+          "type": "string",
+          "description": "Details of any regressions or compilation breaks introduced"
+        },
+        "reviewerNotes": {
+          "type": "string",
+          "description": "Reviewer comments, engine defect root causes, or architectural observations"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
