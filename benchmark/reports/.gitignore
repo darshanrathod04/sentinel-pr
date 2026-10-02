@@ -1,0 +1,4 @@
+# Ignore benchmark report artifacts
+*.json
+*.md
+!.gitkeep

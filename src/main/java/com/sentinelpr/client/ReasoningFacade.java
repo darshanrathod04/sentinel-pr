@@ -177,6 +177,15 @@ public class ReasoningFacade {
                 continue;
             }
 
+            // If creation is nested inside another STREAM_TYPES creation,
+            // the enclosing stream decorator owns/manages this stream. Skip to avoid duplicate/corrupted patching.
+            boolean isWrappedByStream = creation.findAncestor(ObjectCreationExpr.class)
+                    .map(ancestor -> STREAM_TYPES.contains(ancestor.getTypeAsString()))
+                    .orElse(false);
+            if (isWrappedByStream) {
+                continue;
+            }
+
             // Check if inside try-with-resources
             TryStmt tryStmt = creation.findAncestor(TryStmt.class).orElse(null);
             boolean inTryWithResources = false;
@@ -190,15 +199,29 @@ public class ReasoningFacade {
                 continue;
             }
 
-            // Check if assigned to a local variable that is closed in a finally block
+            // Check if assigned to a variable that is closed in a finally block
+            String varName = null;
             VariableDeclarator varDecl = creation.findAncestor(VariableDeclarator.class).orElse(null);
+            if (varDecl != null) {
+                varName = varDecl.getNameAsString();
+            } else {
+                AssignExpr assign = creation.findAncestor(AssignExpr.class).orElse(null);
+                if (assign != null && assign.getTarget() instanceof NameExpr target) {
+                    varName = target.getNameAsString();
+                }
+            }
+
             boolean closedInFinally = false;
-            if (varDecl != null && tryStmt != null && tryStmt.getFinallyBlock().isPresent()) {
-                String varName = varDecl.getNameAsString();
-                List<MethodCallExpr> finallyCalls = tryStmt.getFinallyBlock().get().findAll(MethodCallExpr.class);
-                closedInFinally = finallyCalls.stream().anyMatch(call ->
-                        "close".equals(call.getNameAsString()) && call.getScope().map(s -> s.toString().equals(varName)).orElse(false)
-                );
+            if (varName != null) {
+                final String targetVar = varName;
+                MethodDeclaration method = creation.findAncestor(MethodDeclaration.class).orElse(null);
+                if (method != null) {
+                    closedInFinally = method.findAll(TryStmt.class).stream()
+                            .filter(t -> t.getFinallyBlock().isPresent())
+                            .flatMap(t -> t.getFinallyBlock().get().findAll(MethodCallExpr.class).stream())
+                            .anyMatch(call -> "close".equals(call.getNameAsString())
+                                    && call.getScope().map(s -> s.toString().equals(targetVar)).orElse(false));
+                }
             }
 
             if (!closedInFinally) {

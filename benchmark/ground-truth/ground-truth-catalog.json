@@ -1,0 +1,2978 @@
+[
+  {
+    "caseId": "TC-SEC001-V01",
+    "ruleId": "SEC-001-FAIL-OPEN",
+    "caseType": "VULNERABLE",
+    "description": "Catch block catches generic Exception and returns true, creating a fail-open authorization bypass",
+    "fixturePaths": [
+      "benchmark/cases/SEC-001/SEC-001-V01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-001/SEC-001-V01.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "CRITICAL",
+      "targetConstruct": "verifyAccess",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "return false;"
+      ],
+      "forbiddenRemediationTokens": [
+        "return true;"
+      ]
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Tests detection of fail-open authorization catch block and conversion to fail-closed.",
+    "suite": "CANONICAL"
+  },
+  {
+    "caseId": "TC-SEC001-S01",
+    "ruleId": "SEC-001-FAIL-OPEN",
+    "caseType": "SAFE",
+    "description": "Catch block catches generic Exception and returns false, enforcing secure fail-closed semantics",
+    "fixturePaths": [
+      "benchmark/cases/SEC-001/SEC-001-S01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-001/SEC-001-S01.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Safe fail-closed authorization. Must yield 0 findings.",
+    "suite": "CANONICAL"
+  },
+  {
+    "caseId": "TC-SEC002-V01",
+    "ruleId": "SEC-002-UNCLOSED-STREAM",
+    "caseType": "VULNERABLE",
+    "description": "FileInputStream allocated in method body without try-with-resources or deterministic close",
+    "fixturePaths": [
+      "benchmark/cases/SEC-002/SEC-002-V01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-002/SEC-002-V01.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "HIGH",
+      "targetConstruct": "countBytes",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "try (FileInputStream"
+      ],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Tests detection of unclosed I/O resource and wrapping into try-with-resources.",
+    "suite": "CANONICAL"
+  },
+  {
+    "caseId": "TC-SEC002-S01",
+    "ruleId": "SEC-002-UNCLOSED-STREAM",
+    "caseType": "SAFE",
+    "description": "FileInputStream allocated within try-with-resources statement ensuring deterministic close",
+    "fixturePaths": [
+      "benchmark/cases/SEC-002/SEC-002-S01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-002/SEC-002-S01.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Safe try-with-resources stream usage. Must yield 0 findings.",
+    "suite": "CANONICAL"
+  },
+  {
+    "caseId": "TC-SEC003-V01",
+    "ruleId": "SEC-003-VOLATILE-COMPOUND",
+    "caseType": "VULNERABLE",
+    "description": "Non-atomic compound increment operation (counter++) on volatile integer field",
+    "fixturePaths": [
+      "benchmark/cases/SEC-003/SEC-003-V01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-003/SEC-003-V01.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "HIGH",
+      "targetConstruct": "recordRequest",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "AtomicInteger",
+        "incrementAndGet"
+      ],
+      "forbiddenRemediationTokens": [
+        "volatile int requestCount",
+        "requestCount++"
+      ]
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Tests detection of non-atomic volatile compound operation and transformation to AtomicInteger.",
+    "suite": "CANONICAL"
+  },
+  {
+    "caseId": "TC-SEC003-S01",
+    "ruleId": "SEC-003-VOLATILE-COMPOUND",
+    "caseType": "SAFE",
+    "description": "Thread-safe AtomicInteger incrementAndGet() method call",
+    "fixturePaths": [
+      "benchmark/cases/SEC-003/SEC-003-S01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-003/SEC-003-S01.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Safe AtomicInteger usage. Must yield 0 findings.",
+    "suite": "CANONICAL"
+  },
+  {
+    "caseId": "TC-SEC004-V01",
+    "ruleId": "SEC-004-UNISOLATED-SUBPROCESS",
+    "caseType": "VULNERABLE",
+    "description": "Un-isolated Runtime.getRuntime().exec() call with dynamically concatenated command string",
+    "fixturePaths": [
+      "benchmark/cases/SEC-004/SEC-004-V01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-004/SEC-004-V01.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "CRITICAL",
+      "targetConstruct": "executeCommand",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "ProcessBuilder"
+      ],
+      "forbiddenRemediationTokens": [
+        "Runtime.getRuntime().exec"
+      ]
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Tests detection of un-isolated Runtime.exec and transformation to ProcessBuilder.",
+    "suite": "CANONICAL"
+  },
+  {
+    "caseId": "TC-SEC004-S01",
+    "ruleId": "SEC-004-UNISOLATED-SUBPROCESS",
+    "caseType": "SAFE",
+    "description": "ProcessBuilder with explicit tokenized argument array and process isolation",
+    "fixturePaths": [
+      "benchmark/cases/SEC-004/SEC-004-S01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-004/SEC-004-S01.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Safe ProcessBuilder with distinct arguments. Must yield 0 findings.",
+    "suite": "CANONICAL"
+  },
+  {
+    "caseId": "TC-SEC005-V01",
+    "ruleId": "SEC-005-SQL-INJECTION",
+    "caseType": "VULNERABLE",
+    "description": "JDBC Statement executing raw concatenated SQL string query",
+    "fixturePaths": [
+      "benchmark/cases/SEC-005/SEC-005-V01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-005/SEC-005-V01.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "CRITICAL",
+      "targetConstruct": "findUserByUsername",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "PreparedStatement",
+        "prepareStatement",
+        "?",
+        "stmt.setString(1,",
+        "stmt.executeQuery()"
+      ],
+      "forbiddenRemediationTokens": [
+        "\" + username",
+        "APP_SECRET",
+        "conn.createStatement()"
+      ]
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Tests parameterized PreparedStatement transformation with positional placeholder and setString binding.",
+    "suite": "CANONICAL"
+  },
+  {
+    "caseId": "TC-SEC005-S01",
+    "ruleId": "SEC-005-SQL-INJECTION",
+    "caseType": "SAFE",
+    "description": "Parameterized PreparedStatement using positional placeholder and setString binding",
+    "fixturePaths": [
+      "benchmark/cases/SEC-005/SEC-005-S01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-005/SEC-005-S01.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Safe parameterized PreparedStatement. Must yield 0 findings.",
+    "suite": "CANONICAL"
+  },
+  {
+    "caseId": "TC-SEC006-V01",
+    "ruleId": "SEC-006-PATH-TRAVERSAL",
+    "caseType": "VULNERABLE",
+    "description": "File object instantiated directly from unvalidated dynamic user report name",
+    "fixturePaths": [
+      "benchmark/cases/SEC-006/SEC-006-V01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-006/SEC-006-V01.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "CRITICAL",
+      "targetConstruct": "resolveReport",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "normalize()",
+        "startsWith"
+      ],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Tests path traversal detection and path normalization containment guard remediation.",
+    "suite": "CANONICAL"
+  },
+  {
+    "caseId": "TC-SEC006-S01",
+    "ruleId": "SEC-006-PATH-TRAVERSAL",
+    "caseType": "SAFE",
+    "description": "File object validated with Path.normalize() and base directory containment check",
+    "fixturePaths": [
+      "benchmark/cases/SEC-006/SEC-006-S01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-006/SEC-006-S01.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Safe path normalization and startsWith check. Must yield 0 findings.",
+    "suite": "CANONICAL"
+  },
+  {
+    "caseId": "TC-SEC007-V01",
+    "ruleId": "SEC-007-INSECURE-DESERIALIZATION",
+    "caseType": "VULNERABLE",
+    "description": "ObjectInputStream.readObject() invoked directly on untrusted input stream without filter",
+    "fixturePaths": [
+      "benchmark/cases/SEC-007/SEC-007-V01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-007/SEC-007-V01.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "CRITICAL",
+      "targetConstruct": "readPayload",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "setObjectInputFilter"
+      ],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Tests insecure deserialization detection and addition of ObjectInputFilter.",
+    "suite": "CANONICAL"
+  },
+  {
+    "caseId": "TC-SEC007-S01",
+    "ruleId": "SEC-007-INSECURE-DESERIALIZATION",
+    "caseType": "SAFE",
+    "description": "ObjectInputStream configured with strict allowlisting ObjectInputFilter",
+    "fixturePaths": [
+      "benchmark/cases/SEC-007/SEC-007-S01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-007/SEC-007-S01.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Safe ObjectInputFilter configured. Must yield 0 findings.",
+    "suite": "CANONICAL"
+  },
+  {
+    "caseId": "TC-SEC008-V01",
+    "ruleId": "SEC-008-HARDCODED-SECRET",
+    "caseType": "VULNERABLE",
+    "description": "Hardcoded database password literal in DriverManager.getConnection call",
+    "fixturePaths": [
+      "benchmark/cases/SEC-008/SEC-008-V01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-008/SEC-008-V01.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "HIGH",
+      "targetConstruct": "acquireConnection",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "System.getenv(\"DB_URL\")",
+        "System.getenv(\"DB_USER\")",
+        "System.getenv(\"DB_PASSWORD\")"
+      ],
+      "forbiddenRemediationTokens": [
+        "SuperSecretDbPassword123!",
+        "APP_SECRET"
+      ]
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Tests context-aware externalization of database credentials into DB_URL, DB_USER, DB_PASSWORD.",
+    "suite": "CANONICAL"
+  },
+  {
+    "caseId": "TC-SEC008-S01",
+    "ruleId": "SEC-008-HARDCODED-SECRET",
+    "caseType": "SAFE",
+    "description": "Database credentials retrieved dynamically from System.getenv environment variables",
+    "fixturePaths": [
+      "benchmark/cases/SEC-008/SEC-008-S01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-008/SEC-008-S01.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Safe environment credential retrieval. Must yield 0 findings.",
+    "suite": "CANONICAL"
+  },
+  {
+    "caseId": "TC-SEC009-V01",
+    "ruleId": "SEC-009-SPRING-SECURITY-CSRF-DISABLED",
+    "caseType": "VULNERABLE",
+    "description": "Spring SecurityFilterChain bean disables CSRF protection on stateful session policy",
+    "fixturePaths": [
+      "benchmark/cases/SEC-009/SEC-009-V01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-009/SEC-009-V01.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "HIGH",
+      "targetConstruct": "filterChain",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "SessionCreationPolicy.STATELESS"
+      ],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": false,
+      "patchedCompiles": false,
+      "compilationSkipReason": "Spring Security framework classes not bundled in benchmark classpath"
+    },
+    "notes": "Tests detection of CSRF disabled without stateless session policy.",
+    "suite": "CANONICAL"
+  },
+  {
+    "caseId": "TC-SEC009-S01",
+    "ruleId": "SEC-009-SPRING-SECURITY-CSRF-DISABLED",
+    "caseType": "SAFE",
+    "description": "Spring SecurityFilterChain with CSRF disabled alongside explicit SessionCreationPolicy.STATELESS",
+    "fixturePaths": [
+      "benchmark/cases/SEC-009/SEC-009-S01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-009/SEC-009-S01.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": false,
+      "patchedCompiles": false,
+      "compilationSkipReason": "Spring Security framework classes not bundled in benchmark classpath"
+    },
+    "notes": "Safe stateless session policy paired with CSRF disable. Must yield 0 findings.",
+    "suite": "CANONICAL"
+  },
+  {
+    "caseId": "TC-SEC010-V01",
+    "ruleId": "SEC-010-SPRING-PERMISSIVE-CORS",
+    "caseType": "VULNERABLE",
+    "description": "Spring @RestController endpoint annotated with wildcard origin @CrossOrigin(origins = '*')",
+    "fixturePaths": [
+      "benchmark/cases/SEC-010/SEC-010-V01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-010/SEC-010-V01.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "MEDIUM",
+      "targetConstruct": "Sec010PermissiveCorsVulnerable",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "@CrossOrigin(origins ="
+      ],
+      "forbiddenRemediationTokens": [
+        "origins = \"*\""
+      ]
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Tests detection of permissive wildcard CORS policy and origin restriction remediation.",
+    "suite": "CANONICAL"
+  },
+  {
+    "caseId": "TC-SEC010-S01",
+    "ruleId": "SEC-010-SPRING-PERMISSIVE-CORS",
+    "caseType": "SAFE",
+    "description": "Spring @RestController endpoint annotated with explicit trusted domain @CrossOrigin",
+    "fixturePaths": [
+      "benchmark/cases/SEC-010/SEC-010-S01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-010/SEC-010-S01.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Safe explicit origin whitelist. Must yield 0 findings.",
+    "suite": "CANONICAL"
+  },
+  {
+    "caseId": "TC-ARCH001-V01",
+    "ruleId": "ARCH-001-CYCLIC-DEPENDENCY",
+    "caseType": "VULNERABLE",
+    "description": "Two Spring services (CyclicServiceA and CyclicServiceB) mutually depending on each other",
+    "fixturePaths": [
+      "benchmark/cases/ARCH-001/vulnerable/CyclicServiceA.java",
+      "benchmark/cases/ARCH-001/vulnerable/CyclicServiceB.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/ARCH-001/vulnerable/CyclicServiceA.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "MEDIUM",
+      "targetConstruct": "CyclicServiceA",
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Multi-file architectural cyclic dependency. Automated single-file remediation not applicable.",
+    "suite": "CANONICAL"
+  },
+  {
+    "caseId": "TC-ARCH001-S01",
+    "ruleId": "ARCH-001-CYCLIC-DEPENDENCY",
+    "caseType": "SAFE",
+    "description": "Two Spring services organized in clean unidirectional dependency without cycles",
+    "fixturePaths": [
+      "benchmark/cases/ARCH-001/safe/DecoupledServiceA.java",
+      "benchmark/cases/ARCH-001/safe/DecoupledServiceB.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/ARCH-001/safe/DecoupledServiceA.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Safe unidirectional architectural design. Must yield 0 findings.",
+    "suite": "CANONICAL"
+  },
+  {
+    "caseId": "TC-ARCH002-V01",
+    "ruleId": "ARCH-002-LEAKY-ABSTRACTION",
+    "caseType": "VULNERABLE",
+    "description": "Spring @RestController endpoint returning internal database UserEntity directly",
+    "fixturePaths": [
+      "benchmark/cases/ARCH-002/vulnerable/LeakyUserController.java",
+      "benchmark/cases/ARCH-002/vulnerable/UserEntity.java",
+      "benchmark/cases/ARCH-002/vulnerable/UserDto.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/ARCH-002/vulnerable/LeakyUserController.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "HIGH",
+      "targetConstruct": "getUserProfile",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "UserDto"
+      ],
+      "forbiddenRemediationTokens": [
+        "UserEntity getUserProfile"
+      ]
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Tests leaky entity detection and transformation to encapsulated DTO return type.",
+    "suite": "CANONICAL"
+  },
+  {
+    "caseId": "TC-ARCH002-S01",
+    "ruleId": "ARCH-002-LEAKY-ABSTRACTION",
+    "caseType": "SAFE",
+    "description": "Spring @RestController endpoint returning encapsulated UserDto record",
+    "fixturePaths": [
+      "benchmark/cases/ARCH-002/safe/SafeUserController.java",
+      "benchmark/cases/ARCH-002/safe/UserDto.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/ARCH-002/safe/SafeUserController.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Safe encapsulated DTO return type. Must yield 0 findings.",
+    "suite": "CANONICAL"
+  },
+  {
+    "caseId": "TC-ARCH003-V01",
+    "ruleId": "ARCH-003-NON-DETERMINISTIC-CALLS",
+    "caseType": "VULNERABLE",
+    "description": "Spring @Service business class making direct invocation to System.currentTimeMillis()",
+    "fixturePaths": [
+      "benchmark/cases/ARCH-003/ARCH-003-V01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/ARCH-003/ARCH-003-V01.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "MEDIUM",
+      "targetConstruct": "generateTransactionTimestamp",
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Tests detection of direct System.currentTimeMillis() call in Spring service.",
+    "suite": "CANONICAL"
+  },
+  {
+    "caseId": "TC-ARCH003-S01",
+    "ruleId": "ARCH-003-NON-DETERMINISTIC-CALLS",
+    "caseType": "SAFE",
+    "description": "Spring @Service business class utilizing injected Clock bean for deterministic time",
+    "fixturePaths": [
+      "benchmark/cases/ARCH-003/ARCH-003-S01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/ARCH-003/ARCH-003-S01.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Safe injected Clock instance for deterministic testing. Must yield 0 findings.",
+    "suite": "CANONICAL"
+  },
+  {
+    "caseId": "ADV-SEC005-V01",
+    "ruleId": "SEC-005-SQL-INJECTION",
+    "caseType": "VULNERABLE",
+    "suite": "ADVERSARIAL",
+    "description": "SQL built using user input concatenated into query string and executed via statement.executeQuery",
+    "fixturePaths": [
+      "benchmark/cases/SEC-005/ADV-SEC005-V01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-005/ADV-SEC005-V01.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "CRITICAL",
+      "targetConstruct": "executeQuery",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "prepareStatement",
+        "?"
+      ],
+      "forbiddenRemediationTokens": [
+        "+ userQuery"
+      ]
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Adversarial SEC-005: string parameter concatenation."
+  },
+  {
+    "caseId": "ADV-SEC005-V02",
+    "ruleId": "SEC-005-SQL-INJECTION",
+    "caseType": "VULNERABLE",
+    "suite": "ADVERSARIAL",
+    "description": "SQL query containing multiple concatenated user parameters across filter conditions",
+    "fixturePaths": [
+      "benchmark/cases/SEC-005/ADV-SEC005-V02.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-005/ADV-SEC005-V02.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "CRITICAL",
+      "targetConstruct": "executeQuery",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "prepareStatement",
+        "?"
+      ],
+      "forbiddenRemediationTokens": [
+        "+ username",
+        "+ department"
+      ]
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Adversarial SEC-005: multiple parameters."
+  },
+  {
+    "caseId": "ADV-SEC005-V03",
+    "ruleId": "SEC-005-SQL-INJECTION",
+    "caseType": "VULNERABLE",
+    "suite": "ADVERSARIAL",
+    "description": "SQL query concatenating numeric parameter into WHERE id = clause",
+    "fixturePaths": [
+      "benchmark/cases/SEC-005/ADV-SEC005-V03.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-005/ADV-SEC005-V03.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "CRITICAL",
+      "targetConstruct": "executeQuery",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "prepareStatement",
+        "?"
+      ],
+      "forbiddenRemediationTokens": [
+        "+ accountId"
+      ]
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Adversarial SEC-005: numeric parameter concatenation."
+  },
+  {
+    "caseId": "ADV-SEC005-V04",
+    "ruleId": "SEC-005-SQL-INJECTION",
+    "caseType": "VULNERABLE",
+    "suite": "ADVERSARIAL",
+    "description": "SQL DDL/DML update concatenating user input executed via statement.execute(rawSql)",
+    "fixturePaths": [
+      "benchmark/cases/SEC-005/ADV-SEC005-V04.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-005/ADV-SEC005-V04.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "CRITICAL",
+      "targetConstruct": "execute",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "prepareStatement",
+        "?"
+      ],
+      "forbiddenRemediationTokens": [
+        "+ roleName"
+      ]
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Adversarial SEC-005: execute(rawSql)."
+  },
+  {
+    "caseId": "ADV-SEC005-V05",
+    "ruleId": "SEC-005-SQL-INJECTION",
+    "caseType": "VULNERABLE",
+    "suite": "ADVERSARIAL",
+    "description": "Direct inline executeQuery sink with string concatenation inside argument list",
+    "fixturePaths": [
+      "benchmark/cases/SEC-005/ADV-SEC005-V05.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-005/ADV-SEC005-V05.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "CRITICAL",
+      "targetConstruct": "executeQuery",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "prepareStatement",
+        "?"
+      ],
+      "forbiddenRemediationTokens": [
+        "+ email"
+      ]
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Adversarial SEC-005: direct inline executeQuery."
+  },
+  {
+    "caseId": "ADV-SEC005-V06",
+    "ruleId": "SEC-005-SQL-INJECTION",
+    "caseType": "VULNERABLE",
+    "suite": "ADVERSARIAL",
+    "description": "Multiline SQL query concatenation with joins and where clauses",
+    "fixturePaths": [
+      "benchmark/cases/SEC-005/ADV-SEC005-V06.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-005/ADV-SEC005-V06.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "CRITICAL",
+      "targetConstruct": "executeQuery",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "prepareStatement",
+        "?"
+      ],
+      "forbiddenRemediationTokens": [
+        "+ orderStatus"
+      ]
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Adversarial SEC-005: multiline SQL concatenation."
+  },
+  {
+    "caseId": "ADV-SEC005-V07",
+    "ruleId": "SEC-005-SQL-INJECTION",
+    "caseType": "VULNERABLE",
+    "suite": "ADVERSARIAL",
+    "description": "SQL concatenation with intervening audit logging and validation statements before query sink",
+    "fixturePaths": [
+      "benchmark/cases/SEC-005/ADV-SEC005-V07.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-005/ADV-SEC005-V07.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "CRITICAL",
+      "targetConstruct": "executeQuery",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "prepareStatement",
+        "?"
+      ],
+      "forbiddenRemediationTokens": [
+        "+ filterCategory"
+      ]
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Adversarial SEC-005: intervening statements preservation."
+  },
+  {
+    "caseId": "ADV-SEC005-V08",
+    "ruleId": "SEC-005-SQL-INJECTION",
+    "caseType": "VULNERABLE",
+    "suite": "ADVERSARIAL",
+    "description": "SQL constructed via nested ternary expression and concatenated conditions",
+    "fixturePaths": [
+      "benchmark/cases/SEC-005/ADV-SEC005-V08.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-005/ADV-SEC005-V08.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "CRITICAL",
+      "targetConstruct": "executeQuery",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "prepareStatement",
+        "?"
+      ],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Adversarial SEC-005: nested ternary expression SQL construction."
+  },
+  {
+    "caseId": "ADV-SEC005-S01",
+    "ruleId": "SEC-005-SQL-INJECTION",
+    "caseType": "SAFE",
+    "suite": "ADVERSARIAL",
+    "description": "Safe parameterized PreparedStatement binding values through setString",
+    "fixturePaths": [
+      "benchmark/cases/SEC-005/ADV-SEC005-S01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-005/ADV-SEC005-S01.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Safe PreparedStatement query. Must yield 0 findings."
+  },
+  {
+    "caseId": "ADV-SEC005-S02",
+    "ruleId": "SEC-005-SQL-INJECTION",
+    "caseType": "SAFE",
+    "suite": "ADVERSARIAL",
+    "description": "Safe string concatenation formatting structured application log message",
+    "fixturePaths": [
+      "benchmark/cases/SEC-005/ADV-SEC005-S02.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-005/ADV-SEC005-S02.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Safe non-SQL string concatenation in logging. Must yield 0 findings."
+  },
+  {
+    "caseId": "ADV-SEC008-V01",
+    "ruleId": "SEC-008-HARDCODED-SECRET",
+    "caseType": "VULNERABLE",
+    "suite": "ADVERSARIAL",
+    "description": "Hardcoded production database password assigned to constant field",
+    "fixturePaths": [
+      "benchmark/cases/SEC-008/ADV-SEC008-V01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-008/ADV-SEC008-V01.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "HIGH",
+      "targetConstruct": "DB_PROD_PASSWORD",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "System.getenv"
+      ],
+      "forbiddenRemediationTokens": [
+        "SuperSecretDBPassword#2026!"
+      ]
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Adversarial SEC-008: database password."
+  },
+  {
+    "caseId": "ADV-SEC008-V02",
+    "ruleId": "SEC-008-HARDCODED-SECRET",
+    "caseType": "VULNERABLE",
+    "suite": "ADVERSARIAL",
+    "description": "Hardcoded Stripe/Payment gateway API key assigned to static final field",
+    "fixturePaths": [
+      "benchmark/cases/SEC-008/ADV-SEC008-V02.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-008/ADV-SEC008-V02.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "HIGH",
+      "targetConstruct": "PAYMENT_API_KEY",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "System.getenv"
+      ],
+      "forbiddenRemediationTokens": [
+        "sentinelpr_synthetic_api_key_9f83acb1049281729482910384729103"
+      ]
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Adversarial SEC-008: payment API key."
+  },
+  {
+    "caseId": "ADV-SEC008-V03",
+    "ruleId": "SEC-008-HARDCODED-SECRET",
+    "caseType": "VULNERABLE",
+    "suite": "ADVERSARIAL",
+    "description": "Hardcoded AWS secret access key with high entropy string",
+    "fixturePaths": [
+      "benchmark/cases/SEC-008/ADV-SEC008-V03.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-008/ADV-SEC008-V03.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "HIGH",
+      "targetConstruct": "AWS_SECRET_KEY",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "System.getenv"
+      ],
+      "forbiddenRemediationTokens": [
+        "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+      ]
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Adversarial SEC-008: AWS secret access key."
+  },
+  {
+    "caseId": "ADV-SEC008-V04",
+    "ruleId": "SEC-008-HARDCODED-SECRET",
+    "caseType": "VULNERABLE",
+    "suite": "ADVERSARIAL",
+    "description": "Hardcoded OAuth client secret assigned in local variable declaration",
+    "fixturePaths": [
+      "benchmark/cases/SEC-008/ADV-SEC008-V04.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-008/ADV-SEC008-V04.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "HIGH",
+      "targetConstruct": "clientSecret",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "System.getenv"
+      ],
+      "forbiddenRemediationTokens": [
+        "sec_live_99f8d1c7a4e62b083e5a1b7c9d0e"
+      ]
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Adversarial SEC-008: local variable client secret."
+  },
+  {
+    "caseId": "ADV-SEC008-S01",
+    "ruleId": "SEC-008-HARDCODED-SECRET",
+    "caseType": "SAFE",
+    "suite": "ADVERSARIAL",
+    "description": "Dummy placeholder password clearly marked for local mock/unit tests",
+    "fixturePaths": [
+      "benchmark/cases/SEC-008/ADV-SEC008-S01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-008/ADV-SEC008-S01.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Safe mock password constant. Must yield 0 findings."
+  },
+  {
+    "caseId": "ADV-SEC008-S02",
+    "ruleId": "SEC-008-HARDCODED-SECRET",
+    "caseType": "SAFE",
+    "suite": "ADVERSARIAL",
+    "description": "Dynamic secret loading via System.getenv environment variable",
+    "fixturePaths": [
+      "benchmark/cases/SEC-008/ADV-SEC008-S02.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-008/ADV-SEC008-S02.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Safe environment variable retrieval. Must yield 0 findings."
+  },
+  {
+    "caseId": "ADV-SEC008-S03",
+    "ruleId": "SEC-008-HARDCODED-SECRET",
+    "caseType": "SAFE",
+    "suite": "ADVERSARIAL",
+    "description": "Configuration lookup via System.getProperty with default fallback",
+    "fixturePaths": [
+      "benchmark/cases/SEC-008/ADV-SEC008-S03.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-008/ADV-SEC008-S03.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Safe system property configuration. Must yield 0 findings."
+  },
+  {
+    "caseId": "ADV-SEC008-S04",
+    "ruleId": "SEC-008-HARDCODED-SECRET",
+    "caseType": "SAFE",
+    "suite": "ADVERSARIAL",
+    "description": "Non-secret application constants and header string identifiers",
+    "fixturePaths": [
+      "benchmark/cases/SEC-008/ADV-SEC008-S04.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-008/ADV-SEC008-S04.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Safe standard HTTP headers and content types. Must yield 0 findings."
+  },
+  {
+    "caseId": "ADV-SEC006-V01",
+    "ruleId": "SEC-006-PATH-TRAVERSAL",
+    "caseType": "VULNERABLE",
+    "suite": "ADVERSARIAL",
+    "description": "Unix path traversal using File constructor with concatenated user path",
+    "fixturePaths": [
+      "benchmark/cases/SEC-006/ADV-SEC006-V01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-006/ADV-SEC006-V01.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "CRITICAL",
+      "targetConstruct": "exportFile",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "normalize",
+        "startsWith"
+      ],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Adversarial SEC-006: Unix path traversal."
+  },
+  {
+    "caseId": "ADV-SEC006-V02",
+    "ruleId": "SEC-006-PATH-TRAVERSAL",
+    "caseType": "VULNERABLE",
+    "suite": "ADVERSARIAL",
+    "description": "Windows style path separator concatenation into new File",
+    "fixturePaths": [
+      "benchmark/cases/SEC-006/ADV-SEC006-V02.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-006/ADV-SEC006-V02.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "CRITICAL",
+      "targetConstruct": "loadAttachment",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "normalize",
+        "startsWith"
+      ],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Adversarial SEC-006: Windows path traversal."
+  },
+  {
+    "caseId": "ADV-SEC006-V03",
+    "ruleId": "SEC-006-PATH-TRAVERSAL",
+    "caseType": "VULNERABLE",
+    "suite": "ADVERSARIAL",
+    "description": "URL-decoded file path concatenated into File without directory traversal containment",
+    "fixturePaths": [
+      "benchmark/cases/SEC-006/ADV-SEC006-V03.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-006/ADV-SEC006-V03.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "CRITICAL",
+      "targetConstruct": "downloadAsset",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "normalize",
+        "startsWith"
+      ],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Adversarial SEC-006: Encoded traversal path."
+  },
+  {
+    "caseId": "ADV-SEC006-V04",
+    "ruleId": "SEC-006-PATH-TRAVERSAL",
+    "caseType": "VULNERABLE",
+    "suite": "ADVERSARIAL",
+    "description": "Multi-segment Path.of resolution with untrusted category and filename",
+    "fixturePaths": [
+      "benchmark/cases/SEC-006/ADV-SEC006-V04.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-006/ADV-SEC006-V04.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "CRITICAL",
+      "targetConstruct": "resolveDocument",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "normalize",
+        "startsWith"
+      ],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Adversarial SEC-006: Multi-segment Path.of."
+  },
+  {
+    "caseId": "ADV-SEC006-S01",
+    "ruleId": "SEC-006-PATH-TRAVERSAL",
+    "caseType": "SAFE",
+    "suite": "ADVERSARIAL",
+    "description": "Safe canonical file path containment verification against base directory",
+    "fixturePaths": [
+      "benchmark/cases/SEC-006/ADV-SEC006-S01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-006/ADV-SEC006-S01.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Safe canonical path containment check. Must yield 0 findings."
+  },
+  {
+    "caseId": "ADV-SEC006-S02",
+    "ruleId": "SEC-006-PATH-TRAVERSAL",
+    "caseType": "SAFE",
+    "suite": "ADVERSARIAL",
+    "description": "Safe constant static classpath resource path loading",
+    "fixturePaths": [
+      "benchmark/cases/SEC-006/ADV-SEC006-S02.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-006/ADV-SEC006-S02.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Safe static resource path. Must yield 0 findings."
+  },
+  {
+    "caseId": "ADV-SEC002-V01",
+    "ruleId": "SEC-002-UNCLOSED-STREAM",
+    "caseType": "VULNERABLE",
+    "suite": "ADVERSARIAL",
+    "description": "FileOutputStream instantiated in method body without try-with-resources",
+    "fixturePaths": [
+      "benchmark/cases/SEC-002/ADV-SEC002-V01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-002/ADV-SEC002-V01.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "HIGH",
+      "targetConstruct": "writePayload",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "try (FileOutputStream"
+      ],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Adversarial SEC-002: FileOutputStream without try-with-resources."
+  },
+  {
+    "caseId": "ADV-SEC002-V02",
+    "ruleId": "SEC-002-UNCLOSED-STREAM",
+    "caseType": "VULNERABLE",
+    "suite": "ADVERSARIAL",
+    "description": "Nested BufferedReader wrapping FileReader without try-with-resources",
+    "fixturePaths": [
+      "benchmark/cases/SEC-002/ADV-SEC002-V02.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-002/ADV-SEC002-V02.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "HIGH",
+      "targetConstruct": "readFirstLine",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "try (BufferedReader"
+      ],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Adversarial SEC-002: Nested BufferedReader."
+  },
+  {
+    "caseId": "ADV-SEC002-V03",
+    "ruleId": "SEC-002-UNCLOSED-STREAM",
+    "caseType": "VULNERABLE",
+    "suite": "ADVERSARIAL",
+    "description": "Multiple unclosed streams allocated sequentially in method body",
+    "fixturePaths": [
+      "benchmark/cases/SEC-002/ADV-SEC002-V03.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-002/ADV-SEC002-V03.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "HIGH",
+      "targetConstruct": "copyStreamData",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "try (FileInputStream"
+      ],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Adversarial SEC-002: Multiple unclosed streams."
+  },
+  {
+    "caseId": "ADV-SEC002-S01",
+    "ruleId": "SEC-002-UNCLOSED-STREAM",
+    "caseType": "SAFE",
+    "suite": "ADVERSARIAL",
+    "description": "Legacy try-finally resource close handling",
+    "fixturePaths": [
+      "benchmark/cases/SEC-002/ADV-SEC002-S01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-002/ADV-SEC002-S01.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Safe legacy try/finally stream closing. Must yield 0 findings."
+  },
+  {
+    "caseId": "ADV-SEC002-S02",
+    "ruleId": "SEC-002-UNCLOSED-STREAM",
+    "caseType": "SAFE",
+    "suite": "ADVERSARIAL",
+    "description": "Multiple resources properly managed inside try-with-resources statement",
+    "fixturePaths": [
+      "benchmark/cases/SEC-002/ADV-SEC002-S02.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-002/ADV-SEC002-S02.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Safe multiple resource try-with-resources. Must yield 0 findings."
+  },
+  {
+    "caseId": "ADV-SEC001-V01",
+    "ruleId": "SEC-001-FAIL-OPEN",
+    "caseType": "VULNERABLE",
+    "suite": "ADVERSARIAL",
+    "description": "Authorization catch block returning true on security exception",
+    "fixturePaths": [
+      "benchmark/cases/SEC-001/ADV-SEC001-V01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-001/ADV-SEC001-V01.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "CRITICAL",
+      "targetConstruct": "hasPermission",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "return false;"
+      ],
+      "forbiddenRemediationTokens": [
+        "return true;"
+      ]
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Adversarial SEC-001: Fail-open permission verification."
+  },
+  {
+    "caseId": "ADV-SEC001-V02",
+    "ruleId": "SEC-001-FAIL-OPEN",
+    "caseType": "VULNERABLE",
+    "suite": "ADVERSARIAL",
+    "description": "Session validation catch block returning true on validation error",
+    "fixturePaths": [
+      "benchmark/cases/SEC-001/ADV-SEC001-V02.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-001/ADV-SEC001-V02.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "CRITICAL",
+      "targetConstruct": "validateSessionToken",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "return false;"
+      ],
+      "forbiddenRemediationTokens": [
+        "return true;"
+      ]
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Adversarial SEC-001: Fail-open session validation."
+  },
+  {
+    "caseId": "ADV-SEC001-S01",
+    "ruleId": "SEC-001-FAIL-OPEN",
+    "caseType": "SAFE",
+    "suite": "ADVERSARIAL",
+    "description": "Safe fail-closed admin check returning false on security failure",
+    "fixturePaths": [
+      "benchmark/cases/SEC-001/ADV-SEC001-S01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-001/ADV-SEC001-S01.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Safe fail-closed admin check. Must yield 0 findings."
+  },
+  {
+    "caseId": "ADV-SEC001-S02",
+    "ruleId": "SEC-001-FAIL-OPEN",
+    "caseType": "SAFE",
+    "suite": "ADVERSARIAL",
+    "description": "Safe non-security business calculation fallback with default return value",
+    "fixturePaths": [
+      "benchmark/cases/SEC-001/ADV-SEC001-S02.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-001/ADV-SEC001-S02.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Safe calculation fallback. Must yield 0 findings."
+  },
+  {
+    "caseId": "ADV-SEC003-V01",
+    "ruleId": "SEC-003-VOLATILE-COMPOUND",
+    "caseType": "VULNERABLE",
+    "suite": "ADVERSARIAL",
+    "description": "Postfix increment on volatile integer field",
+    "fixturePaths": [
+      "benchmark/cases/SEC-003/ADV-SEC003-V01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-003/ADV-SEC003-V01.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "HIGH",
+      "targetConstruct": "nextSequence",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "AtomicInteger",
+        "incrementAndGet"
+      ],
+      "forbiddenRemediationTokens": [
+        "volatile int"
+      ]
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Adversarial SEC-003: Postfix increment on volatile variable."
+  },
+  {
+    "caseId": "ADV-SEC003-V02",
+    "ruleId": "SEC-003-VOLATILE-COMPOUND",
+    "caseType": "VULNERABLE",
+    "suite": "ADVERSARIAL",
+    "description": "Non-atomic compound assignment on volatile integer field",
+    "fixturePaths": [
+      "benchmark/cases/SEC-003/ADV-SEC003-V02.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-003/ADV-SEC003-V02.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "HIGH",
+      "targetConstruct": "consumeBudget",
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Adversarial SEC-003: Compound subtraction assignment."
+  },
+  {
+    "caseId": "ADV-SEC003-S01",
+    "ruleId": "SEC-003-VOLATILE-COMPOUND",
+    "caseType": "SAFE",
+    "suite": "ADVERSARIAL",
+    "description": "Thread-safe AtomicLong counter usage",
+    "fixturePaths": [
+      "benchmark/cases/SEC-003/ADV-SEC003-S01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-003/ADV-SEC003-S01.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Safe atomic variable. Must yield 0 findings."
+  },
+  {
+    "caseId": "ADV-SEC004-V01",
+    "ruleId": "SEC-004-UNISOLATED-SUBPROCESS",
+    "caseType": "VULNERABLE",
+    "suite": "ADVERSARIAL",
+    "description": "Runtime.getRuntime().exec with concatenated command line string",
+    "fixturePaths": [
+      "benchmark/cases/SEC-004/ADV-SEC004-V01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-004/ADV-SEC004-V01.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "CRITICAL",
+      "targetConstruct": "launchBackup",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "new ProcessBuilder"
+      ],
+      "forbiddenRemediationTokens": [
+        "Runtime.getRuntime().exec"
+      ]
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Adversarial SEC-004: Runtime.exec concat string."
+  },
+  {
+    "caseId": "ADV-SEC004-V02",
+    "ruleId": "SEC-004-UNISOLATED-SUBPROCESS",
+    "caseType": "VULNERABLE",
+    "suite": "ADVERSARIAL",
+    "description": "Runtime.getRuntime().exec invoked with dynamic string array without isolation",
+    "fixturePaths": [
+      "benchmark/cases/SEC-004/ADV-SEC004-V02.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-004/ADV-SEC004-V02.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "CRITICAL",
+      "targetConstruct": "runUserScript",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "new ProcessBuilder"
+      ],
+      "forbiddenRemediationTokens": [
+        "Runtime.getRuntime().exec"
+      ]
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Adversarial SEC-004: Runtime.exec array."
+  },
+  {
+    "caseId": "ADV-SEC004-S01",
+    "ruleId": "SEC-004-UNISOLATED-SUBPROCESS",
+    "caseType": "SAFE",
+    "suite": "ADVERSARIAL",
+    "description": "Isolated ProcessBuilder execution with fixed argument list",
+    "fixturePaths": [
+      "benchmark/cases/SEC-004/ADV-SEC004-S01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-004/ADV-SEC004-S01.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Safe ProcessBuilder with fixed arguments. Must yield 0 findings."
+  },
+  {
+    "caseId": "ADV-SEC007-V01",
+    "ruleId": "SEC-007-INSECURE-DESERIALIZATION",
+    "caseType": "VULNERABLE",
+    "suite": "ADVERSARIAL",
+    "description": "ObjectInputStream.readObject invoked on byte stream without filtering",
+    "fixturePaths": [
+      "benchmark/cases/SEC-007/ADV-SEC007-V01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-007/ADV-SEC007-V01.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "CRITICAL",
+      "targetConstruct": "parseSerializedData",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "setObjectInputFilter"
+      ],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Adversarial SEC-007: ObjectInputStream.readObject."
+  },
+  {
+    "caseId": "ADV-SEC007-V02",
+    "ruleId": "SEC-007-INSECURE-DESERIALIZATION",
+    "caseType": "VULNERABLE",
+    "suite": "ADVERSARIAL",
+    "description": "ObjectInputStream.readUnshared invoked on input stream without filtering",
+    "fixturePaths": [
+      "benchmark/cases/SEC-007/ADV-SEC007-V02.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-007/ADV-SEC007-V02.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "CRITICAL",
+      "targetConstruct": "parseMessagePayload",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "setObjectInputFilter"
+      ],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Adversarial SEC-007: ObjectInputStream.readUnshared."
+  },
+  {
+    "caseId": "ADV-SEC007-S01",
+    "ruleId": "SEC-007-INSECURE-DESERIALIZATION",
+    "caseType": "SAFE",
+    "suite": "ADVERSARIAL",
+    "description": "Safe deserialization with strict ObjectInputFilter applied before readObject",
+    "fixturePaths": [
+      "benchmark/cases/SEC-007/ADV-SEC007-S01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-007/ADV-SEC007-S01.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Safe filtered ObjectInputStream. Must yield 0 findings."
+  },
+  {
+    "caseId": "ADV-SEC009-V01",
+    "ruleId": "SEC-009-SPRING-SECURITY-CSRF-DISABLED",
+    "caseType": "VULNERABLE",
+    "suite": "ADVERSARIAL",
+    "description": "Spring Security filter chain explicitly disables CSRF without STATELESS session management",
+    "fixturePaths": [
+      "benchmark/cases/SEC-009/ADV-SEC009-V01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-009/ADV-SEC009-V01.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "HIGH",
+      "targetConstruct": "apiSecurityFilterChain",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "// CSRF protection preserved"
+      ],
+      "forbiddenRemediationTokens": [
+        "http.csrf().disable()"
+      ]
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Adversarial SEC-009: CSRF disable."
+  },
+  {
+    "caseId": "ADV-SEC009-S01",
+    "ruleId": "SEC-009-SPRING-SECURITY-CSRF-DISABLED",
+    "caseType": "SAFE",
+    "suite": "ADVERSARIAL",
+    "description": "Safe stateless API filter chain configured with SessionCreationPolicy.STATELESS",
+    "fixturePaths": [
+      "benchmark/cases/SEC-009/ADV-SEC009-S01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-009/ADV-SEC009-S01.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Safe stateless filter chain with SessionCreationPolicy.STATELESS. Must yield 0 findings."
+  },
+  {
+    "caseId": "ADV-SEC010-V01",
+    "ruleId": "SEC-010-SPRING-PERMISSIVE-CORS",
+    "caseType": "VULNERABLE",
+    "suite": "ADVERSARIAL",
+    "description": "Method-level @CrossOrigin annotation configuring permissive wildcard origin '*'",
+    "fixturePaths": [
+      "benchmark/cases/SEC-010/ADV-SEC010-V01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-010/ADV-SEC010-V01.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "MEDIUM",
+      "targetConstruct": "exportTelemetry",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "@CrossOrigin(origins = \"https://trusted.domain.com\")"
+      ],
+      "forbiddenRemediationTokens": [
+        "@CrossOrigin(origins = \"*\")"
+      ]
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Adversarial SEC-010: method-level permissive CORS."
+  },
+  {
+    "caseId": "ADV-SEC010-S01",
+    "ruleId": "SEC-010-SPRING-PERMISSIVE-CORS",
+    "caseType": "SAFE",
+    "suite": "ADVERSARIAL",
+    "description": "Safe restricted CORS configuration with specific trusted enterprise origin",
+    "fixturePaths": [
+      "benchmark/cases/SEC-010/ADV-SEC010-S01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/SEC-010/ADV-SEC010-S01.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Safe restricted CORS origin. Must yield 0 findings."
+  },
+  {
+    "caseId": "ADV-ARCH002-V01",
+    "ruleId": "ARCH-002-LEAKY-ABSTRACTION",
+    "caseType": "VULNERABLE",
+    "suite": "ADVERSARIAL",
+    "description": "Spring @RestController endpoint returning internal database OrderEntity directly",
+    "fixturePaths": [
+      "benchmark/cases/ARCH-002/vulnerable_adv/LeakyOrderController.java",
+      "benchmark/cases/ARCH-002/vulnerable_adv/OrderEntity.java",
+      "benchmark/cases/ARCH-002/vulnerable_adv/OrderDto.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/ARCH-002/vulnerable_adv/LeakyOrderController.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "HIGH",
+      "targetConstruct": "getRecentOrder",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "OrderDto"
+      ],
+      "forbiddenRemediationTokens": [
+        "OrderEntity getRecentOrder"
+      ]
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Adversarial ARCH-002: Leaky OrderEntity abstraction in REST controller."
+  },
+  {
+    "caseId": "ADV-ARCH002-S01",
+    "ruleId": "ARCH-002-LEAKY-ABSTRACTION",
+    "caseType": "SAFE",
+    "suite": "ADVERSARIAL",
+    "description": "Spring @RestController endpoint returning encapsulated OrderDto record",
+    "fixturePaths": [
+      "benchmark/cases/ARCH-002/safe_adv/SafeOrderController.java",
+      "benchmark/cases/ARCH-002/safe_adv/OrderDto.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/ARCH-002/safe_adv/SafeOrderController.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Safe encapsulated OrderDto return type. Must yield 0 findings."
+  },
+  {
+    "caseId": "ADV-ARCH003-V01",
+    "ruleId": "ARCH-003-NON-DETERMINISTIC-CALLS",
+    "caseType": "VULNERABLE",
+    "suite": "ADVERSARIAL",
+    "description": "Spring @Service business class making direct invocation to Math.random()",
+    "fixturePaths": [
+      "benchmark/cases/ARCH-003/ADV-ARCH003-V01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/ARCH-003/ADV-ARCH003-V01.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "MEDIUM",
+      "targetConstruct": "calculateDynamicDiscount",
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Adversarial ARCH-003: Math.random() in Spring @Service."
+  },
+  {
+    "caseId": "ADV-ARCH003-S01",
+    "ruleId": "ARCH-003-NON-DETERMINISTIC-CALLS",
+    "caseType": "SAFE",
+    "suite": "ADVERSARIAL",
+    "description": "Spring @Service business class utilizing SecureRandom for token generation",
+    "fixturePaths": [
+      "benchmark/cases/ARCH-003/ADV-ARCH003-S01.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/ARCH-003/ADV-ARCH003-S01.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Safe SecureRandom in @Service. Must yield 0 findings."
+  },
+  {
+    "caseId": "REAL-SEC005-01",
+    "ruleId": "SEC-005-SQL-INJECTION",
+    "caseType": "VULNERABLE",
+    "suite": "REALISTIC",
+    "description": "Multi-file e-commerce order search passing customer identifier from REST controller through service to JDBC repository with dynamic string concatenation",
+    "fixturePaths": [
+      "benchmark/cases/realistic/REAL-SEC005-01/OrderSearchController.java",
+      "benchmark/cases/realistic/REAL-SEC005-01/OrderSearchService.java",
+      "benchmark/cases/realistic/REAL-SEC005-01/OrderJdbcRepository.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/realistic/REAL-SEC005-01/OrderJdbcRepository.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "CRITICAL",
+      "targetConstruct": "searchByCustomer",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "prepareStatement",
+        "?"
+      ],
+      "forbiddenRemediationTokens": [
+        "+ customerId"
+      ]
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Realistic multi-file SEC-005: Controller -> Service -> Repository with dynamic SQL concatenation."
+  },
+  {
+    "caseId": "REAL-SEC005-02",
+    "ruleId": "SEC-005-SQL-INJECTION",
+    "caseType": "SAFE",
+    "suite": "REALISTIC",
+    "description": "Multi-file customer account lookup using PreparedStatement with parameter binding across controller, service, and repository",
+    "fixturePaths": [
+      "benchmark/cases/realistic/REAL-SEC005-02/CustomerAccountController.java",
+      "benchmark/cases/realistic/REAL-SEC005-02/CustomerAccountService.java",
+      "benchmark/cases/realistic/REAL-SEC005-02/CustomerAccountRepository.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/realistic/REAL-SEC005-02/CustomerAccountRepository.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Safe multi-file PreparedStatement with parameter binding. Must yield 0 findings."
+  },
+  {
+    "caseId": "REAL-SEC005-03",
+    "ruleId": "SEC-005-SQL-INJECTION",
+    "caseType": "VULNERABLE",
+    "suite": "REALISTIC",
+    "description": "Multi-hop inventory query passing SKU parameter through controller, service, helper, and repository with unescaped SQL concatenation",
+    "fixturePaths": [
+      "benchmark/cases/realistic/REAL-SEC005-03/InventoryQueryController.java",
+      "benchmark/cases/realistic/REAL-SEC005-03/InventoryQueryService.java",
+      "benchmark/cases/realistic/REAL-SEC005-03/InventoryQueryHelper.java",
+      "benchmark/cases/realistic/REAL-SEC005-03/InventoryRepository.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/realistic/REAL-SEC005-03/InventoryRepository.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "CRITICAL",
+      "targetConstruct": "findItemBySku",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "prepareStatement",
+        "?"
+      ],
+      "forbiddenRemediationTokens": [
+        "+ sku"
+      ]
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Realistic 4-hop multi-file SEC-005: Controller -> Service -> Helper -> Repository."
+  },
+  {
+    "caseId": "REAL-SEC005-04",
+    "ruleId": "SEC-005-SQL-INJECTION",
+    "caseType": "VULNERABLE",
+    "suite": "REALISTIC",
+    "description": "Multi-file audit log maintenance service containing SQL injection in repository purge query alongside hardcoded database credentials in configuration",
+    "fixturePaths": [
+      "benchmark/cases/realistic/REAL-SEC005-04/AuditLogController.java",
+      "benchmark/cases/realistic/REAL-SEC005-04/AuditLogService.java",
+      "benchmark/cases/realistic/REAL-SEC005-04/AuditLogRepository.java",
+      "benchmark/cases/realistic/REAL-SEC005-04/AuditDbConfig.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/realistic/REAL-SEC005-04/AuditLogRepository.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "CRITICAL",
+      "targetConstruct": "purgeLogsByStatus",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "prepareStatement",
+        "?"
+      ],
+      "forbiddenRemediationTokens": [
+        "+ status"
+      ]
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Multi-finding realistic case: SQL injection in repository alongside hardcoded secret in config."
+  },
+  {
+    "caseId": "REAL-SEC005-05",
+    "ruleId": "SEC-005-SQL-INJECTION",
+    "caseType": "SAFE",
+    "suite": "REALISTIC",
+    "description": "Enterprise order reporting service featuring extensive pagination, multi-column sorting, audit logging, DTO conversions, and parameterized SQL queries (~324 LOC)",
+    "fixturePaths": [
+      "benchmark/cases/realistic/REAL-SEC005-05/EnterpriseOrderReportingService.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/realistic/REAL-SEC005-05/EnterpriseOrderReportingService.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Large noisy safe enterprise service (~324 LOC). Must yield 0 findings."
+  },
+  {
+    "caseId": "REAL-SEC005-06",
+    "ruleId": "SEC-005-SQL-INJECTION",
+    "caseType": "VULNERABLE",
+    "suite": "REALISTIC",
+    "description": "Enterprise billing ledger service with extensive tax computation, invoice generation, discount calculations, audit events, and an unescaped SQL query (~549 LOC)",
+    "fixturePaths": [
+      "benchmark/cases/realistic/REAL-SEC005-06/EnterpriseBillingLedgerService.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/realistic/REAL-SEC005-06/EnterpriseBillingLedgerService.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "CRITICAL",
+      "targetConstruct": "queryInvoicesByAccount",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "prepareStatement",
+        "?"
+      ],
+      "forbiddenRemediationTokens": [
+        "+ accountId"
+      ]
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Large noisy vulnerable enterprise service (~549 LOC). Tests SQL injection remediation in noisy source."
+  },
+  {
+    "caseId": "REAL-SEC006-01",
+    "ruleId": "SEC-006-PATH-TRAVERSAL",
+    "caseType": "VULNERABLE",
+    "suite": "REALISTIC",
+    "description": "Multi-file document download flow passing filename from REST controller through storage service to filesystem utility without path containment",
+    "fixturePaths": [
+      "benchmark/cases/realistic/REAL-SEC006-01/DocumentDownloadController.java",
+      "benchmark/cases/realistic/REAL-SEC006-01/DocumentStorageService.java",
+      "benchmark/cases/realistic/REAL-SEC006-01/FileSystemStorageUtil.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/realistic/REAL-SEC006-01/FileSystemStorageUtil.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "CRITICAL",
+      "targetConstruct": "resolveDocumentFile",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "getCanonicalFile",
+        "startsWith"
+      ],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Realistic multi-file SEC-006: Controller -> Service -> StorageUtil."
+  },
+  {
+    "caseId": "REAL-SEC006-02",
+    "ruleId": "SEC-006-PATH-TRAVERSAL",
+    "caseType": "SAFE",
+    "suite": "REALISTIC",
+    "description": "Multi-file report export pipeline with strict path normalization and base directory containment validation across controller, service, and manager",
+    "fixturePaths": [
+      "benchmark/cases/realistic/REAL-SEC006-02/ReportExportController.java",
+      "benchmark/cases/realistic/REAL-SEC006-02/ReportExportService.java",
+      "benchmark/cases/realistic/REAL-SEC006-02/ReportStorageManager.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/realistic/REAL-SEC006-02/ReportStorageManager.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Safe normalized path traversal guard. Must yield 0 findings."
+  },
+  {
+    "caseId": "REAL-SEC006-03",
+    "ruleId": "SEC-006-PATH-TRAVERSAL",
+    "caseType": "VULNERABLE",
+    "suite": "REALISTIC",
+    "description": "Multi-file asset delivery service with unvalidated file path instantiation in service alongside unclosed stream in controller preview endpoint",
+    "fixturePaths": [
+      "benchmark/cases/realistic/REAL-SEC006-03/AssetDeliveryController.java",
+      "benchmark/cases/realistic/REAL-SEC006-03/AssetDeliveryService.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/realistic/REAL-SEC006-03/AssetDeliveryService.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "CRITICAL",
+      "targetConstruct": "loadAsset",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "getCanonicalFile",
+        "startsWith"
+      ],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Multi-finding realistic case: Path Traversal in service + Unclosed Stream in controller."
+  },
+  {
+    "caseId": "REAL-SEC006-04",
+    "ruleId": "SEC-006-PATH-TRAVERSAL",
+    "caseType": "SAFE",
+    "suite": "REALISTIC",
+    "description": "Secure content delivery service featuring MIME type resolution, CDN cache invalidation, ETag verification, and canonical path boundary checks (~313 LOC)",
+    "fixturePaths": [
+      "benchmark/cases/realistic/REAL-SEC006-04/SecureContentDeliveryService.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/realistic/REAL-SEC006-04/SecureContentDeliveryService.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Noisy safe content delivery service (~313 LOC). Must yield 0 findings."
+  },
+  {
+    "caseId": "REAL-SEC008-01",
+    "ruleId": "SEC-008-HARDCODED-SECRET",
+    "caseType": "VULNERABLE",
+    "suite": "REALISTIC",
+    "description": "Multi-file payment gateway integration with hardcoded database credentials in database configuration class",
+    "fixturePaths": [
+      "benchmark/cases/realistic/REAL-SEC008-01/PaymentGatewayClient.java",
+      "benchmark/cases/realistic/REAL-SEC008-01/PaymentGatewayConfig.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/realistic/REAL-SEC008-01/PaymentGatewayConfig.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "HIGH",
+      "targetConstruct": "getPaymentConnection",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "System.getenv"
+      ],
+      "forbiddenRemediationTokens": [
+        "ProdSecretDbPass2026!"
+      ]
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Realistic multi-file SEC-008: Hardcoded database credentials."
+  },
+  {
+    "caseId": "REAL-SEC008-02",
+    "ruleId": "SEC-008-HARDCODED-SECRET",
+    "caseType": "SAFE",
+    "suite": "REALISTIC",
+    "description": "Multi-file cloud secret management system sourcing credentials strictly via environment variables across controller, service, and config",
+    "fixturePaths": [
+      "benchmark/cases/realistic/REAL-SEC008-02/CloudSecretsController.java",
+      "benchmark/cases/realistic/REAL-SEC008-02/CloudSecretsService.java",
+      "benchmark/cases/realistic/REAL-SEC008-02/CloudProviderConfig.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/realistic/REAL-SEC008-02/CloudProviderConfig.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Safe externalized environment secrets. Must yield 0 findings."
+  },
+  {
+    "caseId": "REAL-SEC008-03",
+    "ruleId": "SEC-008-HARDCODED-SECRET",
+    "caseType": "VULNERABLE",
+    "suite": "REALISTIC",
+    "description": "Multi-file authentication subsystem with hardcoded signing secret in auth service alongside permissive CORS configuration",
+    "fixturePaths": [
+      "benchmark/cases/realistic/REAL-SEC008-03/AuthTokenService.java",
+      "benchmark/cases/realistic/REAL-SEC008-03/AuthWebCorsConfig.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/realistic/REAL-SEC008-03/AuthTokenService.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "HIGH",
+      "targetConstruct": "signToken",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "System.getenv"
+      ],
+      "forbiddenRemediationTokens": [
+        "sentinelpr_synthetic_jwt_token_99887766554433221100aabbccddeeff"
+      ]
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Multi-finding realistic case: Hardcoded secret in auth service + Permissive CORS in config."
+  },
+  {
+    "caseId": "REAL-SEC002-01",
+    "ruleId": "SEC-002-UNCLOSED-STREAM",
+    "caseType": "VULNERABLE",
+    "suite": "REALISTIC",
+    "description": "Multi-file batch data import pipeline with unclosed BufferedReader in CSV processing service",
+    "fixturePaths": [
+      "benchmark/cases/realistic/REAL-SEC002-01/BatchImportController.java",
+      "benchmark/cases/realistic/REAL-SEC002-01/CsvImportService.java",
+      "benchmark/cases/realistic/REAL-SEC002-01/CsvRecordParser.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/realistic/REAL-SEC002-01/CsvImportService.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "MEDIUM",
+      "targetConstruct": "processImportFile",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "try ("
+      ],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Realistic multi-file SEC-002: Controller -> Service -> Parser."
+  },
+  {
+    "caseId": "REAL-SEC002-02",
+    "ruleId": "SEC-002-UNCLOSED-STREAM",
+    "caseType": "SAFE",
+    "suite": "REALISTIC",
+    "description": "Multi-file data export service utilizing try-with-resources for deterministic stream closure across controller, service, and archive writer",
+    "fixturePaths": [
+      "benchmark/cases/realistic/REAL-SEC002-02/DataExportController.java",
+      "benchmark/cases/realistic/REAL-SEC002-02/DataExportService.java",
+      "benchmark/cases/realistic/REAL-SEC002-02/ArchiveWriter.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/realistic/REAL-SEC002-02/ArchiveWriter.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Safe try-with-resources across multi-file pipeline. Must yield 0 findings."
+  },
+  {
+    "caseId": "REAL-SEC002-03",
+    "ruleId": "SEC-002-UNCLOSED-STREAM",
+    "caseType": "SAFE",
+    "suite": "REALISTIC",
+    "description": "Enterprise log archiver service with nested GZIP streams, rolling file policy, retry logic, and deterministic try-with-resources cleanup (~220 LOC)",
+    "fixturePaths": [
+      "benchmark/cases/realistic/REAL-SEC002-03/EnterpriseLogArchiverService.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/realistic/REAL-SEC002-03/EnterpriseLogArchiverService.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Noisy safe log archiver service (~220 LOC). Must yield 0 findings."
+  },
+  {
+    "caseId": "REAL-SEC004-01",
+    "ruleId": "SEC-004-UNISOLATED-SUBPROCESS",
+    "caseType": "VULNERABLE",
+    "suite": "REALISTIC",
+    "description": "Multi-file GitOps deployment controller delegating to execution service that invokes Runtime.getRuntime().exec() directly",
+    "fixturePaths": [
+      "benchmark/cases/realistic/REAL-SEC004-01/DeploymentWebhookController.java",
+      "benchmark/cases/realistic/REAL-SEC004-01/GitOpsDeploymentService.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/realistic/REAL-SEC004-01/GitOpsDeploymentService.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "CRITICAL",
+      "targetConstruct": "executeGitPull",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "new ProcessBuilder"
+      ],
+      "forbiddenRemediationTokens": [
+        "Runtime.getRuntime().exec"
+      ]
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Realistic multi-file SEC-004: Controller -> GitOps service."
+  },
+  {
+    "caseId": "REAL-SEC004-02",
+    "ruleId": "SEC-004-UNISOLATED-SUBPROCESS",
+    "caseType": "SAFE",
+    "suite": "REALISTIC",
+    "description": "Multi-file system diagnostics service executing read-only commands via ProcessBuilder with fixed argument arrays",
+    "fixturePaths": [
+      "benchmark/cases/realistic/REAL-SEC004-02/SystemMetricsController.java",
+      "benchmark/cases/realistic/REAL-SEC004-02/SystemDiagnosticsService.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/realistic/REAL-SEC004-02/SystemDiagnosticsService.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Safe ProcessBuilder with fixed token arguments. Must yield 0 findings."
+  },
+  {
+    "caseId": "REAL-SEC007-01",
+    "ruleId": "SEC-007-INSECURE-DESERIALIZATION",
+    "caseType": "VULNERABLE",
+    "suite": "REALISTIC",
+    "description": "Multi-file asynchronous queue worker invoking ObjectInputStream.readObject() without an active ObjectInputFilter",
+    "fixturePaths": [
+      "benchmark/cases/realistic/REAL-SEC007-01/QueueConsumerController.java",
+      "benchmark/cases/realistic/REAL-SEC007-01/PayloadDeserializerService.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/realistic/REAL-SEC007-01/PayloadDeserializerService.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "CRITICAL",
+      "targetConstruct": "deserializePayload",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "setObjectInputFilter"
+      ],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Realistic multi-file SEC-007: Controller -> Deserializer service."
+  },
+  {
+    "caseId": "REAL-SEC007-02",
+    "ruleId": "SEC-007-INSECURE-DESERIALIZATION",
+    "caseType": "SAFE",
+    "suite": "REALISTIC",
+    "description": "Multi-file event processing pipeline with strict allowlist ObjectInputFilter configured on ObjectInputStream",
+    "fixturePaths": [
+      "benchmark/cases/realistic/REAL-SEC007-02/EventReceiverController.java",
+      "benchmark/cases/realistic/REAL-SEC007-02/EventDeserializerService.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/realistic/REAL-SEC007-02/EventDeserializerService.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Safe deserialization with active ObjectInputFilter. Must yield 0 findings."
+  },
+  {
+    "caseId": "REAL-SEC001-01",
+    "ruleId": "SEC-001-FAIL-OPEN",
+    "caseType": "VULNERABLE",
+    "suite": "REALISTIC",
+    "description": "Multi-file security gatekeeper where JWT validator catch block returns true, creating a fail-open authorization bypass",
+    "fixturePaths": [
+      "benchmark/cases/realistic/REAL-SEC001-01/AccessGateController.java",
+      "benchmark/cases/realistic/REAL-SEC001-01/TokenAuthenticationService.java",
+      "benchmark/cases/realistic/REAL-SEC001-01/JwtSecurityValidator.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/realistic/REAL-SEC001-01/JwtSecurityValidator.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "CRITICAL",
+      "targetConstruct": "verifyTokenAccess",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "return false;"
+      ],
+      "forbiddenRemediationTokens": [
+        "return true;"
+      ]
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Realistic multi-file SEC-001: Controller -> Service -> Validator."
+  },
+  {
+    "caseId": "REAL-SEC001-02",
+    "ruleId": "SEC-001-FAIL-OPEN",
+    "caseType": "SAFE",
+    "suite": "REALISTIC",
+    "description": "Multi-file policy evaluation engine enforcing fail-closed authorization semantics on error across controller and service",
+    "fixturePaths": [
+      "benchmark/cases/realistic/REAL-SEC001-02/PolicyCheckController.java",
+      "benchmark/cases/realistic/REAL-SEC001-02/PolicyEvaluationService.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/realistic/REAL-SEC001-02/PolicyEvaluationService.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Safe fail-closed policy service. Must yield 0 findings."
+  },
+  {
+    "caseId": "REAL-SEC009-01",
+    "ruleId": "SEC-009-SPRING-SECURITY-CSRF-DISABLED",
+    "caseType": "VULNERABLE",
+    "suite": "REALISTIC",
+    "description": "Spring Boot security configuration disabling CSRF protection on stateful session policy alongside embedded JWT secret",
+    "fixturePaths": [
+      "benchmark/cases/realistic/REAL-SEC009-01/EnterpriseWebSecurityConfig.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/realistic/REAL-SEC009-01/EnterpriseWebSecurityConfig.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "HIGH",
+      "targetConstruct": "filterChain",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "// CSRF protection preserved"
+      ],
+      "forbiddenRemediationTokens": [
+        "http.csrf().disable()"
+      ]
+    },
+    "compilationExpectation": {
+      "originalCompiles": false,
+      "patchedCompiles": false,
+      "compilationSkipReason": "Spring Security framework classes not bundled in benchmark classpath"
+    },
+    "notes": "Multi-finding realistic case: CSRF disabled on stateful policy + Hardcoded secret in config."
+  },
+  {
+    "caseId": "REAL-SEC009-02",
+    "ruleId": "SEC-009-SPRING-SECURITY-CSRF-DISABLED",
+    "caseType": "SAFE",
+    "suite": "REALISTIC",
+    "description": "Spring Boot REST security configuration with CSRF disabled alongside explicit SessionCreationPolicy.STATELESS",
+    "fixturePaths": [
+      "benchmark/cases/realistic/REAL-SEC009-02/RestApiSecurityConfig.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/realistic/REAL-SEC009-02/RestApiSecurityConfig.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": false,
+      "patchedCompiles": false,
+      "compilationSkipReason": "Spring Security framework classes not bundled in benchmark classpath"
+    },
+    "notes": "Safe stateless session policy paired with CSRF disable. Must yield 0 findings."
+  },
+  {
+    "caseId": "REAL-SEC010-01",
+    "ruleId": "SEC-010-SPRING-PERMISSIVE-CORS",
+    "caseType": "VULNERABLE",
+    "suite": "REALISTIC",
+    "description": "Multi-file WebMvc configuration with wildcard CORS origin and credentials allowed alongside an authorization interceptor",
+    "fixturePaths": [
+      "benchmark/cases/realistic/REAL-SEC010-01/EnterpriseCorsConfig.java",
+      "benchmark/cases/realistic/REAL-SEC010-01/CorsAuthInterceptor.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/realistic/REAL-SEC010-01/EnterpriseCorsConfig.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "MEDIUM",
+      "targetConstruct": "addCorsMappings",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "https://trusted.domain.com"
+      ],
+      "forbiddenRemediationTokens": [
+        "allowedOrigins(\"*\")"
+      ]
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Multi-finding realistic case: Permissive wildcard CORS + secondary fail-open finding in interceptor.",
+    "suite": "REALISTIC"
+  },
+  {
+    "caseId": "REAL-SEC010-02",
+    "ruleId": "SEC-010-SPRING-PERMISSIVE-CORS",
+    "caseType": "SAFE",
+    "suite": "REALISTIC",
+    "description": "Multi-file Spring WebMvc CORS configuration restricting origins strictly to trusted enterprise domain",
+    "fixturePaths": [
+      "benchmark/cases/realistic/REAL-SEC010-02/SecureCorsConfig.java",
+      "benchmark/cases/realistic/REAL-SEC010-02/CorsSecurityProperties.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/realistic/REAL-SEC010-02/SecureCorsConfig.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Safe explicit origin CORS configuration. Must yield 0 findings."
+  },
+  {
+    "caseId": "REAL-ARCH002-01",
+    "ruleId": "ARCH-002-LEAKY-ABSTRACTION",
+    "caseType": "VULNERABLE",
+    "suite": "REALISTIC",
+    "description": "Multi-file enterprise customer management system exposing CustomerEntity directly in @RestController endpoint",
+    "fixturePaths": [
+      "benchmark/cases/realistic/REAL-ARCH002-01/CustomerProfileController.java",
+      "benchmark/cases/realistic/REAL-ARCH002-01/CustomerEntity.java",
+      "benchmark/cases/realistic/REAL-ARCH002-01/CustomerDto.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/realistic/REAL-ARCH002-01/CustomerProfileController.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "HIGH",
+      "targetConstruct": "getCustomerProfile",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "CustomerDto"
+      ],
+      "forbiddenRemediationTokens": [
+        "CustomerEntity"
+      ]
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Realistic multi-file ARCH-002: CustomerProfileController exposing CustomerEntity with CustomerDto available."
+  },
+  {
+    "caseId": "REAL-ARCH002-02",
+    "ruleId": "ARCH-002-LEAKY-ABSTRACTION",
+    "caseType": "SAFE",
+    "suite": "REALISTIC",
+    "description": "Multi-file enterprise product catalog controller properly encapsulating domain model within ProductDto record",
+    "fixturePaths": [
+      "benchmark/cases/realistic/REAL-ARCH002-02/ProductCatalogController.java",
+      "benchmark/cases/realistic/REAL-ARCH002-02/ProductDto.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/realistic/REAL-ARCH002-02/ProductCatalogController.java",
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Safe encapsulated ProductDto record return type. Must yield 0 findings."
+  },
+  {
+    "caseId": "REAL-ARCH001-01",
+    "ruleId": "ARCH-001-CYCLIC-DEPENDENCY",
+    "caseType": "VULNERABLE",
+    "suite": "REALISTIC",
+    "description": "Multi-file cyclic dependency between OrderFulfillmentService and CustomerBillingService in an enterprise commerce engine",
+    "fixturePaths": [
+      "benchmark/cases/realistic/REAL-ARCH001-01/OrderFulfillmentService.java",
+      "benchmark/cases/realistic/REAL-ARCH001-01/CustomerBillingService.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/realistic/REAL-ARCH001-01/OrderFulfillmentService.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "MEDIUM",
+      "targetConstruct": "OrderFulfillmentService",
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Realistic multi-file ARCH-001: Mutual dependency cycle between OrderFulfillmentService and CustomerBillingService."
+  },
+  {
+    "caseId": "REAL-ARCH003-01",
+    "ruleId": "ARCH-003-NON-DETERMINISTIC-CALLS",
+    "caseType": "VULNERABLE",
+    "suite": "REALISTIC",
+    "description": "Enterprise dynamic pricing engine service making non-deterministic Math.random() calls in business logic (~200 LOC)",
+    "fixturePaths": [
+      "benchmark/cases/realistic/REAL-ARCH003-01/DynamicPricingEngineService.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/realistic/REAL-ARCH003-01/DynamicPricingEngineService.java",
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "MEDIUM",
+      "targetConstruct": "calculateDynamicDiscount",
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Noisy realistic ARCH-003: Math.random() call in dynamic pricing calculation service."
+  },
+  {
+    "caseId": "XFILE-SEC005-V01",
+    "ruleId": "SEC-005-SQL-INJECTION",
+    "caseType": "VULNERABLE",
+    "suite": "CROSS_FILE",
+    "description": "Multi-tier order search: userFilter @RequestParam flows through OrderSearchController -> OrderQueryService -> OrderDynamicRepository executeOrderQuery() sink",
+    "fixturePaths": [
+      "benchmark/cases/cross_file/XFILE-SEC005-V01/OrderSearchController.java",
+      "benchmark/cases/cross_file/XFILE-SEC005-V01/OrderQueryService.java",
+      "benchmark/cases/cross_file/XFILE-SEC005-V01/OrderDynamicRepository.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/cross_file/XFILE-SEC005-V01/OrderSearchController.java",
+    "entryPointFixturePath": "benchmark/cases/cross_file/XFILE-SEC005-V01/OrderSearchController.java",
+    "remediationFixturePath": "benchmark/cases/cross_file/XFILE-SEC005-V01/OrderDynamicRepository.java",
+    "crossFileEvaluation": true,
+    "groundTruth": {
+      "expectedFinding": true,
+      "expectedSeverity": "CRITICAL",
+      "targetConstruct": "searchOrders",
+      "expectedRemediation": true,
+      "requiredRemediationTokens": [
+        "prepareStatement",
+        "setString"
+      ],
+      "forbiddenRemediationTokens": [
+        "createStatement"
+      ]
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": true,
+      "compilationSkipReason": null
+    },
+    "notes": "Pilot true cross-file SEC-005: 3-tier Controller -> Service -> Repository taint propagation with remediation at repository sink."
+  },
+  {
+    "caseId": "XFILE-SEC005-S01",
+    "ruleId": "SEC-005-SQL-INJECTION",
+    "caseType": "SAFE",
+    "suite": "CROSS_FILE",
+    "description": "Multi-tier order search safe preset: preset @RequestParam flows through OrderSearchController -> OrderQueryService allowlist validation & static mapping -> OrderDynamicRepository executeOrderQuery() sink",
+    "fixturePaths": [
+      "benchmark/cases/cross_file/XFILE-SEC005-S01/OrderSearchController.java",
+      "benchmark/cases/cross_file/XFILE-SEC005-S01/OrderQueryService.java",
+      "benchmark/cases/cross_file/XFILE-SEC005-S01/OrderDynamicRepository.java"
+    ],
+    "primaryFixturePath": "benchmark/cases/cross_file/XFILE-SEC005-S01/OrderSearchController.java",
+    "entryPointFixturePath": "benchmark/cases/cross_file/XFILE-SEC005-S01/OrderSearchController.java",
+    "remediationFixturePath": "benchmark/cases/cross_file/XFILE-SEC005-S01/OrderDynamicRepository.java",
+    "crossFileEvaluation": true,
+    "groundTruth": {
+      "expectedFinding": false,
+      "expectedSeverity": null,
+      "targetConstruct": null,
+      "expectedRemediation": false,
+      "requiredRemediationTokens": [],
+      "forbiddenRemediationTokens": []
+    },
+    "compilationExpectation": {
+      "originalCompiles": true,
+      "patchedCompiles": false,
+      "compilationSkipReason": null
+    },
+    "notes": "Pilot true cross-file SEC-005 safe: Allowlist map and validation guard terminate taint before reaching identical repository sink."
+  }
+]

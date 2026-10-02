@@ -9,16 +9,18 @@ import com.sentinelpr.core.model.InspectedSource;
 import com.sentinelpr.core.model.SecurityFinding;
 import com.sentinelpr.core.model.SecurityRule;
 import com.sentinelpr.core.model.UnifiedDiffPatch;
+import com.sentinelpr.core.remediation.PatchQualityMetrics;
+import com.sentinelpr.core.remediation.PatchValidationStatus;
+import com.sentinelpr.core.remediation.RemediationContext;
+import com.sentinelpr.core.remediation.RemediationResult;
+import com.sentinelpr.core.remediation.RemediationStrategy;
+import com.sentinelpr.core.remediation.RemediationTemplateRegistry;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -28,6 +30,9 @@ import java.util.stream.Collectors;
  * multiple security findings, PatchComposer applies all verified AST transformations
  * sequentially to a single in-memory source and generates ONE clean, unified diff per file,
  * followed by regression verification.</p>
+ *
+ * <p><b>H-2 Hardening:</b> Tracks cumulative line deltas and resolves findings dynamically
+ * in current source to prevent line-shift corruption across sequential patch applications.</p>
  */
 public class PatchComposer {
 
@@ -68,13 +73,50 @@ public class PatchComposer {
                 ? source.getFilePath().toString()
                 : "VulnerableService.java";
 
-        // Sort findings in deterministic order: Volatiles first, Streams second, Fail-open third, Subprocess fourth
+        // Sort findings in deterministic order
         List<SecurityFinding> sortedFindings = new ArrayList<>(findings);
         sortedFindings.sort(Comparator.comparingInt(this::rulePriority));
 
+        RemediationTemplateRegistry registry = RemediationTemplateRegistry.getInstance();
+        RemediationContext context = new RemediationContext(targetFilePath, sortedFindings);
+        List<String> appliedStrategies = new ArrayList<>();
+        boolean anyFallbackUsed = false;
+        List<SourceRange> modifiedRanges = new ArrayList<>();
+
         String currentSource = originalSource;
-        for (SecurityFinding finding : sortedFindings) {
-            currentSource = applyTransformation(currentSource, finding, targetFilePath);
+        int cumulativeLineDelta = 0;
+
+        for (SecurityFinding originalFinding : sortedFindings) {
+            // H-2: Dynamically resolve finding construct & coordinates in currentSource
+            SecurityFinding finding = resolveFindingInCurrentSource(currentSource, originalFinding, cumulativeLineDelta);
+
+            // Check for range conflict with previous transformations
+            if (isRangeConflict(finding, modifiedRanges)) {
+                if (!isSafeToApply(currentSource, finding)) {
+                    continue;
+                }
+            }
+
+            RemediationStrategy strategy = registry.getStrategy(finding.getRule());
+            if (strategy != null) {
+                int preLines = countLines(currentSource);
+                RemediationResult result = strategy.remediate(currentSource, finding, source, context);
+                if (result.isApplied() && isValidJava(result.getPatchedSource())) {
+                    currentSource = result.getPatchedSource();
+                    int postLines = countLines(currentSource);
+                    cumulativeLineDelta += (postLines - preLines);
+
+                    appliedStrategies.add(result.getStrategyName());
+                    if (result.isFallbackUsed()) {
+                        anyFallbackUsed = true;
+                    }
+                    int rStart = result.getStartLine() > 0 ? result.getStartLine() : finding.getStartLine();
+                    int rEnd = result.getEndLine() >= rStart ? result.getEndLine() : finding.getEndLine();
+                    if (rStart > 0 && rEnd >= rStart) {
+                        modifiedRanges.add(new SourceRange(rStart, rEnd));
+                    }
+                }
+            }
         }
 
         // Regression & AST Syntax Verification
@@ -119,6 +161,25 @@ public class PatchComposer {
         boolean regressionVerified = verified && verificationResult.isRegressionVerified();
         String finalDiff = (status == UnifiedDiffPatch.Status.SUCCESS) ? unifiedDiff : "";
 
+        PatchValidationStatus valStatus;
+        if (!isModified) {
+            valStatus = PatchValidationStatus.NOT_APPLICABLE;
+        } else if (verificationResult.isSyntaxValid()) {
+            valStatus = PatchValidationStatus.VALID_PATCH;
+        } else {
+            valStatus = PatchValidationStatus.INVALID_PATCH;
+        }
+
+        PatchQualityMetrics qualityMetrics = new PatchQualityMetrics(
+                isModified,
+                verificationResult.isSyntaxValid(),
+                isModified && !verificationResult.isSyntaxValid(),
+                anyFallbackUsed,
+                String.join(", ", appliedStrategies),
+                appliedStrategies,
+                verificationResult.isSyntaxValid() ? "" : verificationResult.getMessage()
+        );
+
         return new UnifiedDiffPatch(
                 combinedFindingIds,
                 combinedRuleIds,
@@ -128,8 +189,108 @@ public class PatchComposer {
                 status,
                 verified,
                 regressionVerified,
-                message
+                message,
+                qualityMetrics,
+                valStatus
         );
+    }
+
+    /**
+     * Resolves the actual line coordinates of a finding in the current (potentially mutated) source.
+     * Combines snippet-based search with cumulative line delta alignment.
+     */
+    private SecurityFinding resolveFindingInCurrentSource(
+            String currentSource,
+            SecurityFinding originalFinding,
+            int cumulativeLineDelta
+    ) {
+        String snippet = originalFinding.getVulnerableSnippet();
+        int origStart = originalFinding.getStartLine();
+        int origEnd = originalFinding.getEndLine();
+        int expectedStart = Math.max(1, origStart + cumulativeLineDelta);
+        int expectedEnd = Math.max(expectedStart, origEnd + cumulativeLineDelta);
+
+        if (currentSource == null || currentSource.isBlank()) {
+            return originalFinding;
+        }
+
+        String[] lines = currentSource.split("\\r?\\n", -1);
+
+        // 1. If snippet is available and non-blank, find its actual location in currentSource
+        if (snippet != null && !snippet.isBlank()) {
+            String trimmedSnippet = snippet.trim();
+
+            // A. Check if the line at expectedStart contains the snippet
+            int expectedIdx = expectedStart - 1;
+            if (expectedIdx >= 0 && expectedIdx < lines.length && lines[expectedIdx].contains(trimmedSnippet)) {
+                return originalFinding.withLines(expectedStart, expectedEnd);
+            }
+
+            // B. Search for the line containing trimmedSnippet closest to expectedStart
+            int bestLine = -1;
+            int minDistance = Integer.MAX_VALUE;
+            for (int i = 0; i < lines.length; i++) {
+                if (lines[i].contains(trimmedSnippet)) {
+                    int lineNum = i + 1;
+                    int distance = Math.abs(lineNum - expectedStart);
+                    if (distance < minDistance) {
+                        minDistance = distance;
+                        bestLine = lineNum;
+                    }
+                }
+            }
+
+            if (bestLine != -1) {
+                int lineSpan = Math.max(0, origEnd - origStart);
+                return originalFinding.withLines(bestLine, bestLine + lineSpan);
+            }
+
+            // C. Multi-line snippet check
+            if (trimmedSnippet.contains("\n")) {
+                int idx = currentSource.indexOf(trimmedSnippet);
+                if (idx != -1) {
+                    int matchLine = countLines(currentSource.substring(0, idx));
+                    int snippetLineSpan = countLines(trimmedSnippet) - 1;
+                    return originalFinding.withLines(matchLine, matchLine + snippetLineSpan);
+                }
+            }
+        }
+
+        // 2. Fallback to cumulative delta
+        return originalFinding.withLines(expectedStart, expectedEnd);
+    }
+
+    private int countLines(String text) {
+        if (text == null || text.isEmpty()) return 0;
+        int count = 1;
+        for (int i = 0; i < text.length(); i++) {
+            if (text.charAt(i) == '\n') count++;
+        }
+        return count;
+    }
+
+    private record SourceRange(int startLine, int endLine) {
+        boolean overlaps(int start, int end) {
+            if (start <= 0 || end <= 0) return false;
+            return this.startLine <= end && start <= this.endLine;
+        }
+    }
+
+    private boolean isRangeConflict(SecurityFinding finding, List<SourceRange> modifiedRanges) {
+        int fStart = finding.getStartLine();
+        int fEnd = finding.getEndLine();
+        if (fStart <= 0 || fEnd <= 0) return false;
+        for (SourceRange r : modifiedRanges) {
+            if (r.overlaps(fStart, fEnd)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isSafeToApply(String currentSource, SecurityFinding finding) {
+        String snippet = finding.getVulnerableSnippet();
+        return snippet != null && !snippet.isBlank() && currentSource.contains(snippet);
     }
 
     private int rulePriority(SecurityFinding f) {
@@ -150,516 +311,6 @@ public class PatchComposer {
         };
     }
 
-    private String applyTransformation(String source, SecurityFinding finding, String targetFilePath) {
-        SecurityRule rule = finding.getRule();
-        return switch (rule) {
-            case VOLATILE_COMPOUND_OP -> composeVolatileCompound(source, finding);
-            case UNCLOSED_IO_STREAM -> composeUnclosedStream(source, finding);
-            case FAIL_OPEN_SECURITY -> composeFailOpenSecurity(source, finding);
-            case UNISOLATED_SUBPROCESS -> composeSubprocess(source, finding);
-            case SQL_INJECTION -> composeSqlInjection(source, finding);
-            case PATH_TRAVERSAL -> composePathTraversal(source, finding);
-            case INSECURE_DESERIALIZATION -> composeInsecureDeserialization(source, finding);
-            case HARDCODED_SECRET -> composeHardcodedSecret(source, finding);
-            case SPRING_SECURITY_CSRF_DISABLED -> composeCsrfDisabled(source, finding);
-            case SPRING_PERMISSIVE_CORS -> composePermissiveCors(source, finding);
-            case ARCH_LEAKY_ABSTRACTION -> composeLeakyAbstraction(source, finding, targetFilePath);
-            case ARCH_CYCLIC_DEPENDENCY, ARCH_NON_DETERMINISTIC_CALL -> source;
-        };
-    }
-
-    private String composeLeakyAbstraction(String source, SecurityFinding finding, String targetFilePath) {
-        String entityName = extractEntityNameFromFinding(finding);
-        if (entityName == null || entityName.isBlank()) {
-            return source;
-        }
-
-        String baseName = entityName.endsWith("Entity")
-                ? entityName.substring(0, entityName.length() - 6)
-                : entityName;
-
-        // Resolution order:
-        // 1. Existing DTO
-        // 2. Existing Mapper
-        // 3. Existing Java Record
-        // 4. Otherwise return DEFERRED_TO_MULTI_FILE_PLAN (return source unchanged)
-        DeveloperFacade.ResolvedDtoTarget resolved = resolveDtoTarget(source, baseName, targetFilePath);
-        if (resolved == null) {
-            // Do NOT invent a DTO - return source unchanged so it is deferred to multi-file plan
-            return source;
-        }
-
-        String methodName = finding.getMethodName();
-        if (methodName == null || methodName.isBlank()) {
-            return source;
-        }
-
-        // Apply clean refactoring with balanced parentheses
-        Pattern methodPattern = Pattern.compile(
-                "(public\\s+)" + Pattern.quote(entityName) + "(\\s+" + Pattern.quote(methodName) + "\\s*\\([^)]*\\)\\s*\\{[\\s\\S]*?return\\s+)(.+?)(;)"
-        );
-        Matcher matcher = methodPattern.matcher(source);
-        if (matcher.find()) {
-            String prefix = matcher.group(1) + resolved.targetType() + matcher.group(2);
-            String returnExpr = matcher.group(3).trim();
-            String suffix = matcher.group(4);
-            String replacement = prefix + resolved.wrapExpression(returnExpr) + suffix;
-            String candidate = matcher.replaceFirst(Matcher.quoteReplacement(replacement));
-            if (isValidJava(candidate)) {
-                return candidate;
-            }
-        }
-
-        // Fallback: targeted line replacements
-        String patched = source.replace("public " + entityName + " " + methodName, "public " + resolved.targetType() + " " + methodName);
-        Pattern retPattern = Pattern.compile("return\\s+coupledService\\." + Pattern.quote(methodName) + "\\([^)]*\\);");
-        Matcher retMatcher = retPattern.matcher(patched);
-        if (retMatcher.find()) {
-            String origCall = retMatcher.group(0);
-            String callExpr = origCall.substring("return ".length(), origCall.length() - 1).trim();
-            patched = patched.replace(origCall, "return " + resolved.wrapExpression(callExpr) + ";");
-        }
-
-        if (isValidJava(patched)) {
-            return patched;
-        }
-        return source;
-    }
-
-    private DeveloperFacade.ResolvedDtoTarget resolveDtoTarget(String source, String baseName, String targetFilePath) {
-        // 1. Existing DTO
-        String[] dtoCandidates = {baseName + "Dto", baseName + "DTO"};
-        for (String dtoName : dtoCandidates) {
-            if (checkClassExists(dtoName, source, targetFilePath)) {
-                return new DeveloperFacade.ResolvedDtoTarget(dtoName, dtoName + ".fromEntity");
-            }
-        }
-
-        // 2. Existing Mapper
-        String mapperName = baseName + "Mapper";
-        if (checkClassExists(mapperName, source, targetFilePath)) {
-            String dtoName = baseName + "Dto";
-            return new DeveloperFacade.ResolvedDtoTarget(dtoName, mapperName + ".toDto");
-        }
-
-        // 3. Existing Java Record
-        String recordName = baseName + "Record";
-        if (checkClassExists(recordName, source, targetFilePath)) {
-            return new DeveloperFacade.ResolvedDtoTarget(recordName, recordName + ".fromEntity");
-        }
-
-        // 4. Otherwise: defer to multi-file plan
-        return null;
-    }
-
-    private boolean checkClassExists(String className, String source, String targetFilePath) {
-        if (source != null && (source.contains("import " + className) || source.contains("import static " + className) || source.contains("class " + className))) {
-            return true;
-        }
-
-        if (targetFilePath != null && !targetFilePath.isBlank()) {
-            try {
-                Path targetPath = Path.of(targetFilePath);
-                if (targetPath.getParent() != null) {
-                    Path candidate = targetPath.getParent().resolve(className + ".java");
-                    if (Files.exists(candidate)) {
-                        return true;
-                    }
-                }
-            } catch (Exception ignored) {
-            }
-        }
-
-        Path coupledPath = Path.of("src/test/java/com/sentinelpr/fixture/coupled/" + className + ".java");
-        if (Files.exists(coupledPath)) {
-            return true;
-        }
-
-        Path srcMainPath = Path.of("src/main/java/com/sentinelpr/fixture/coupled/" + className + ".java");
-        if (Files.exists(srcMainPath)) {
-            return true;
-        }
-
-        return false;
-    }
-
-    private String extractEntityNameFromFinding(SecurityFinding finding) {
-        String desc = finding.getDescription();
-        if (desc != null && desc.contains("[") && desc.contains("]")) {
-            int start = desc.indexOf('[');
-            int end = desc.indexOf(']');
-            if (end > start) {
-                return desc.substring(start + 1, end).trim();
-            }
-        }
-        String snippet = finding.getVulnerableSnippet();
-        if (snippet != null) {
-            Pattern p = Pattern.compile("(\\b[A-Z]\\w*Entity\\b)");
-            Matcher m = p.matcher(snippet);
-            if (m.find()) {
-                return m.group(1);
-            }
-        }
-        return "UserEntity";
-    }
-
-    // ─── Transformation: Volatile Compound -> AtomicInteger ──────────────────
-
-    private String composeVolatileCompound(String source, SecurityFinding finding) {
-        String fieldVar = extractVarName(finding.getVulnerableSnippet());
-        String patched = source;
-
-        // Ensure import exists
-        if (!patched.contains("import java.util.concurrent.atomic.AtomicInteger;")) {
-            patched = patched.replaceFirst("package\\s+[^;]+;", "$0\n\nimport java.util.concurrent.atomic.AtomicInteger;");
-        }
-
-        // Transform field declaration
-        patched = patched.replaceAll(
-                "(?:private\\s+|protected\\s+|public\\s+)?volatile\\s+int\\s+" + fieldVar + "\\s*;",
-                "private final AtomicInteger " + fieldVar + " = new AtomicInteger(0);"
-        );
-        patched = patched.replaceAll(
-                "(?:private\\s+|protected\\s+|public\\s+)?volatile\\s+int\\s+" + fieldVar + "\\s*=\\s*\\d+\\s*;",
-                "private final AtomicInteger " + fieldVar + " = new AtomicInteger(0);"
-        );
-
-        // Transform mutations
-        patched = patched.replaceAll("\\b" + fieldVar + "\\+\\+\\s*;", fieldVar + ".incrementAndGet();");
-        patched = patched.replaceAll("\\+\\+\\b" + fieldVar + "\\s*;", fieldVar + ".incrementAndGet();");
-        patched = patched.replaceAll("\\b" + fieldVar + "--\\s*;", fieldVar + ".decrementAndGet();");
-        patched = patched.replaceAll("--\\b" + fieldVar + "\\s*;", fieldVar + ".decrementAndGet();");
-
-        // Transform getter if present: return requestCount; -> return requestCount.get();
-        // Only if getter return type is int
-        patched = patched.replaceAll("return\\s+" + fieldVar + "\\s*;", "return " + fieldVar + ".get();");
-
-        if (isValidJava(patched)) {
-            return patched;
-        }
-        return source;
-    }
-
-    // ─── Transformation: Unclosed Stream -> Try-With-Resources ───────────────
-
-    private String composeUnclosedStream(String source, SecurityFinding finding) {
-        String[] lines = source.split("\\r?\\n", -1);
-        String snippet = finding.getVulnerableSnippet();
-        int streamLineIdx = -1;
-        Pattern streamPattern = Pattern.compile(
-                ".*\\b(FileInputStream|FileOutputStream|InputStream|OutputStream|BufferedReader|FileReader|FileWriter)\\s+(\\w+)\\s*=\\s*new\\s+.*"
-        );
-
-        // 1. First, search for a line matching both stream pattern AND finding snippet/argument
-        if (snippet != null && !snippet.isBlank()) {
-            for (int i = 0; i < lines.length; i++) {
-                if (lines[i].contains(snippet) && streamPattern.matcher(lines[i]).find()) {
-                    if (!lines[i].trim().startsWith("try (") && !lines[i].trim().startsWith("try(")) {
-                        streamLineIdx = i;
-                        break;
-                    }
-                }
-            }
-        }
-
-        // 2. If not found by snippet, search within finding.getMethodName() if available
-        if (streamLineIdx == -1 && finding.getMethodName() != null && !finding.getMethodName().isBlank()) {
-            boolean inMethod = false;
-            for (int i = 0; i < lines.length; i++) {
-                if (lines[i].contains(finding.getMethodName() + "(")) {
-                    inMethod = true;
-                }
-                if (inMethod) {
-                    Matcher m = streamPattern.matcher(lines[i]);
-                    if (m.find() && !lines[i].trim().startsWith("try (") && !lines[i].trim().startsWith("try(")) {
-                        streamLineIdx = i;
-                        break;
-                    }
-                    if (lines[i].trim().equals("}")) {
-                        inMethod = false;
-                    }
-                }
-            }
-        }
-
-        // 3. Fallback to first non-try stream pattern
-        if (streamLineIdx == -1) {
-            for (int i = 0; i < lines.length; i++) {
-                Matcher m = streamPattern.matcher(lines[i]);
-                if (m.find() && !lines[i].trim().startsWith("try (") && !lines[i].trim().startsWith("try(")) {
-                    streamLineIdx = i;
-                    break;
-                }
-            }
-        }
-
-        if (streamLineIdx == -1) {
-            // Fallback snippet replacement
-            if (snippet != null && source.contains(snippet)) {
-                String candidate = source.replace(snippet, "try (" + snippet + ") {\n            // Managed stream\n        }");
-                if (isValidJava(candidate)) return candidate;
-            }
-            return source;
-        }
-
-        String line = lines[streamLineIdx];
-        String indent = extractIndent(line);
-        String trimmed = line.trim();
-        if (trimmed.endsWith(";")) {
-            trimmed = trimmed.substring(0, trimmed.length() - 1);
-        }
-
-        int closeIdx = findEnclosingBlockEnd(lines, streamLineIdx + 1);
-
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < lines.length; i++) {
-            if (i == streamLineIdx) {
-                sb.append(indent).append("try (").append(trimmed).append(") {\n");
-                for (int j = i + 1; j <= closeIdx && j < lines.length; j++) {
-                    if (!lines[j].matches(".*\\b\\w+\\.close\\(\\)\\s*;.*")) {
-                        sb.append("    ").append(lines[j]).append("\n");
-                    }
-                }
-                sb.append(indent).append("}\n");
-                i = closeIdx;
-            } else {
-                sb.append(lines[i]).append("\n");
-            }
-        }
-
-        String result = sb.toString().stripTrailing();
-        if (isValidJava(result)) {
-            return result;
-        }
-        return source;
-    }
-
-    // ─── Transformation: Fail-Open -> Fail-Closed ────────────────────────────
-
-    private String composeFailOpenSecurity(String source, SecurityFinding finding) {
-        String snippet = finding.getVulnerableSnippet();
-        if (snippet != null && !snippet.isBlank()) {
-            // Direct replacement
-            if (source.contains(snippet)) {
-                String safeCatch = snippet.replaceAll("return\\s+true\\s*;", "return false; // SentinelPR: fail-closed security fix");
-                String result = source.replace(snippet, safeCatch);
-                if (isValidJava(result)) return result;
-            }
-
-            // Normalized CRLF/LF replacement
-            String normSnippet = snippet.replace("\r\n", "\n");
-            String normSource = source.replace("\r\n", "\n");
-            if (normSource.contains(normSnippet)) {
-                String safeCatch = normSnippet.replaceAll("return\\s+true\\s*;", "return false; // SentinelPR: fail-closed security fix");
-                String result = normSource.replace(normSnippet, safeCatch);
-                if (isValidJava(result)) return result;
-            }
-        }
-
-        String[] lines = source.split("\\r?\\n", -1);
-        int startLine = finding.getStartLine();
-        int endLine = finding.getEndLine();
-
-        // Line-based replacement around finding boundaries
-        if (startLine > 0) {
-            int scanStart = Math.max(0, startLine - 2);
-            int scanEnd = Math.min(lines.length - 1, endLine + 5);
-            for (int i = scanStart; i <= scanEnd; i++) {
-                if (lines[i].contains("return true;")) {
-                    lines[i] = lines[i].replace("return true;", "return false; // SentinelPR: fail-closed security fix");
-                    String candidate = String.join("\n", lines);
-                    if (isValidJava(candidate)) return candidate;
-                }
-            }
-        }
-
-        // Method scope search with proper brace counting
-        if (finding.getMethodName() != null && !finding.getMethodName().isBlank()) {
-            boolean inMethod = false;
-            int braceDepth = 0;
-            for (int i = 0; i < lines.length; i++) {
-                if (lines[i].contains(finding.getMethodName() + "(")) {
-                    inMethod = true;
-                }
-                if (inMethod) {
-                    for (char c : lines[i].toCharArray()) {
-                        if (c == '{') braceDepth++;
-                        else if (c == '}') braceDepth--;
-                    }
-                    if (lines[i].contains("return true;")) {
-                        lines[i] = lines[i].replace("return true;", "return false; // SentinelPR: fail-closed security fix");
-                        String candidate = String.join("\n", lines);
-                        if (isValidJava(candidate)) return candidate;
-                    }
-                    if (braceDepth <= 0 && lines[i].contains("}")) {
-                        inMethod = false;
-                    }
-                }
-            }
-        }
-
-        return source;
-    }
-
-    // ─── Transformation: Runtime.exec -> ProcessBuilder ──────────────────────
-
-    private String composeSubprocess(String source, SecurityFinding finding) {
-        String patched = source.replace("Runtime.getRuntime().exec(", "new ProcessBuilder(");
-        if (isValidJava(patched)) {
-            return patched;
-        }
-        return source;
-    }
-
-    // ─── Transformation: SQL Injection -> Parameterized Query ───────────────
-
-    private String composeSqlInjection(String source, SecurityFinding finding) {
-        Pattern sqlConcatPattern = Pattern.compile("(?i)(\"\\s*SELECT\\s+[^\"\\n]+WHERE\\s+[^=]+=\\s*['\"]?)\"\\s*\\+\\s*([a-zA-Z0-9_]+)(?:\\s*\\+\\s*\"['\"]*\")?");
-        Matcher m = sqlConcatPattern.matcher(source);
-        if (m.find()) {
-            String fullMatch = m.group(0);
-            String prefix = m.group(1).split("=")[0].trim() + " = ?\"";
-            String patched = source.replace(fullMatch, prefix);
-            if (isValidJava(patched)) {
-                return patched;
-            }
-        }
-
-        String snippet = finding.getVulnerableSnippet();
-        if (snippet != null && source.contains(snippet)) {
-            String safeSnippet = snippet.replaceAll("['\"]?\\s*\\+\\s*[a-zA-Z0-9_]+\\s*\\+\\s*['\"]?", "?");
-            String candidate = source.replace(snippet, safeSnippet);
-            if (isValidJava(candidate)) return candidate;
-        }
-
-        return source;
-    }
-
-    // ─── Transformation: Path Traversal -> Bounds Check ─────────────────────
-
-    private String composePathTraversal(String source, SecurityFinding finding) {
-        String[] lines = source.split("\\r?\\n", -1);
-        int targetIdx = finding.getStartLine() - 1;
-
-        if (targetIdx >= 0 && targetIdx < lines.length) {
-            String line = lines[targetIdx];
-            String indent = extractIndent(line);
-            // Case A: File file = new File(baseDir, filename);
-            if (line.matches(".*\\bFile\\s+(\\w+)\\s*=\\s*new\\s+File\\s*\\(\\s*(\\w+)\\s*,\\s*(\\w+)\\s*\\)\\s*;.*")) {
-                Pattern p = Pattern.compile(".*\\bFile\\s+(\\w+)\\s*=\\s*new\\s+File\\s*\\(\\s*(\\w+)\\s*,\\s*(\\w+)\\s*\\)\\s*;.*");
-                Matcher m = p.matcher(line);
-                if (m.find()) {
-                    String fileVar = m.group(1);
-                    String baseVar = m.group(2);
-                    String fileArg = m.group(3);
-                    String replacement = indent + "File " + fileVar + " = new File(" + baseVar + ", " + fileArg + ").getCanonicalFile();\n"
-                            + indent + "if (!" + fileVar + ".toPath().startsWith(" + baseVar + ".toPath().normalize())) {\n"
-                            + indent + "    throw new SecurityException(\"Path traversal attempt detected\");\n"
-                            + indent + "}";
-                    lines[targetIdx] = replacement;
-                    String result = String.join("\n", lines);
-                    if (isValidJava(result)) return result;
-                }
-            }
-            // Case B: Path target = Path.of(basePath, userPath);
-            if (line.matches(".*\\bPath\\s+(\\w+)\\s*=\\s*Path(?:s)?\\.(?:of|get)\\s*\\(\\s*(\\w+)\\s*,\\s*(\\w+)\\s*\\)\\s*;.*")) {
-                Pattern p = Pattern.compile(".*\\bPath\\s+(\\w+)\\s*=\\s*Path(?:s)?\\.(?:of|get)\\s*\\(\\s*(\\w+)\\s*,\\s*(\\w+)\\s*\\)\\s*;.*");
-                Matcher m = p.matcher(line);
-                if (m.find()) {
-                    String pathVar = m.group(1);
-                    String baseVar = m.group(2);
-                    String pathArg = m.group(3);
-                    String replacement = indent + "Path " + pathVar + " = Path.of(" + baseVar + ".toString(), " + pathArg + ").normalize();\n"
-                            + indent + "if (!" + pathVar + ".startsWith(" + baseVar + ".normalize())) {\n"
-                            + indent + "    throw new SecurityException(\"Path traversal attempt detected\");\n"
-                            + indent + "}";
-                    lines[targetIdx] = replacement;
-                    String result = String.join("\n", lines);
-                    if (isValidJava(result)) return result;
-                }
-            }
-        }
-
-        String snippet = finding.getVulnerableSnippet();
-        if (snippet != null && snippet.startsWith("new File(") && source.contains(snippet)) {
-            String candidate = source.replace(snippet, snippet + ".getCanonicalFile()");
-            if (isValidJava(candidate)) return candidate;
-        }
-
-        return source;
-    }
-
-    // ─── Transformation: Insecure Deserialization -> Safe Filter ─────────────
-
-    private String composeInsecureDeserialization(String source, SecurityFinding finding) {
-        if (finding.getMethodName() != null && !finding.getMethodName().isBlank()) {
-            Pattern oisPattern = Pattern.compile("(\\bObjectInputStream\\s+(\\w+)\\s*=\\s*new\\s+ObjectInputStream\\([^)]+\\);)");
-            Matcher m = oisPattern.matcher(source);
-            if (m.find()) {
-                String match = m.group(1);
-                String oisVar = m.group(2);
-                String patched = source.replace(match, match + "\n        " + oisVar + ".setObjectInputFilter(java.io.ObjectInputFilter.Config.createFilter(\"java.lang.*;java.util.*;!*\"));");
-                if (isValidJava(patched)) return patched;
-            }
-        }
-        return source;
-    }
-
-    // ─── Transformation: Hardcoded Secret -> System.getenv ───────────────────
-
-    private String composeHardcodedSecret(String source, SecurityFinding finding) {
-        String snippet = finding.getVulnerableSnippet();
-        Pattern awsPattern = Pattern.compile("\"(AKIA[0-9A-Z]{16})\"");
-        Matcher m = awsPattern.matcher(snippet != null ? snippet : source);
-        if (m.find()) {
-            String fullQuoted = m.group(0);
-            String patched = source.replace(fullQuoted, "System.getenv(\"AWS_ACCESS_KEY_ID\")");
-            if (isValidJava(patched)) return patched;
-        }
-
-        String[] lines = source.split("\\r?\\n", -1);
-        int targetIdx = finding.getStartLine() - 1;
-        if (targetIdx >= 0 && targetIdx < lines.length) {
-            String line = lines[targetIdx];
-            String patchedLine = line.replaceAll("\"[^\"]+\"", "System.getenv(\"APP_SECRET\")");
-            lines[targetIdx] = patchedLine;
-            String result = String.join("\n", lines);
-            if (isValidJava(result)) return result;
-        }
-
-        return source;
-    }
-
-    // ─── Transformation: Spring CSRF -> Enable or Stateless ──────────────────
-
-    private String composeCsrfDisabled(String source, SecurityFinding finding) {
-        String snippet = finding.getVulnerableSnippet();
-        if (snippet != null && source.contains(snippet)) {
-            String candidate = source.replace(snippet, "// CSRF protection preserved");
-            if (isValidJava(candidate)) return candidate;
-        }
-        return source;
-    }
-
-    // ─── Transformation: Permissive CORS -> Restrict Origins ─────────────────
-
-    private String composePermissiveCors(String source, SecurityFinding finding) {
-        String patched = source
-                .replace("@CrossOrigin(origins = \"*\")", "@CrossOrigin(origins = \"https://trusted.domain.com\")")
-                .replace("@CrossOrigin(\"*\")", "@CrossOrigin(origins = \"https://trusted.domain.com\")")
-                .replace("@CrossOrigin(originPatterns = \"*\")", "@CrossOrigin(origins = \"https://trusted.domain.com\")")
-                .replace(".addAllowedOrigin(\"*\")", ".addAllowedOrigin(\"https://trusted.domain.com\")")
-                .replace(".allowedOrigins(\"*\")", ".allowedOrigins(\"https://trusted.domain.com\")")
-                .replace(".addAllowedOriginPattern(\"*\")", ".addAllowedOrigin(\"https://trusted.domain.com\")");
-
-        if (isValidJava(patched)) {
-            return patched;
-        }
-        return source;
-    }
-
-    // ─── Helpers ─────────────────────────────────────────────────────────────
-
     private boolean isValidJava(String code) {
         if (code == null || code.isBlank()) return false;
         try {
@@ -668,33 +319,5 @@ public class PatchComposer {
         } catch (Exception e) {
             return false;
         }
-    }
-
-    private String extractVarName(String snippet) {
-        if (snippet == null) return "counter";
-        return snippet.replaceAll("[^a-zA-Z0-9_]", "");
-    }
-
-    private String extractIndent(String line) {
-        StringBuilder sb = new StringBuilder();
-        for (char c : line.toCharArray()) {
-            if (Character.isWhitespace(c)) sb.append(c);
-            else break;
-        }
-        return sb.toString();
-    }
-
-    private int findEnclosingBlockEnd(String[] lines, int startIdx) {
-        int lastStatement = startIdx;
-        for (int i = startIdx; i < lines.length; i++) {
-            String trimmed = lines[i].trim();
-            if (trimmed.equals("}") || trimmed.equals("return;") || trimmed.startsWith("return ")) {
-                return i;
-            }
-            if (!trimmed.isEmpty()) {
-                lastStatement = i;
-            }
-        }
-        return Math.min(lines.length - 1, startIdx + 2);
     }
 }

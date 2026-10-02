@@ -6,6 +6,7 @@ import com.github.javaparser.ast.body.MethodDeclaration;
 import com.github.javaparser.ast.expr.AnnotationExpr;
 import com.github.javaparser.ast.expr.ArrayInitializerExpr;
 import com.github.javaparser.ast.expr.Expression;
+import com.github.javaparser.ast.expr.FieldAccessExpr;
 import com.github.javaparser.ast.expr.MethodCallExpr;
 import com.github.javaparser.ast.expr.NormalAnnotationExpr;
 import com.github.javaparser.ast.expr.SingleMemberAnnotationExpr;
@@ -69,8 +70,12 @@ public class FrameworkContextAnalyzer {
                 continue;
             }
 
-            boolean isStateless = methodBody.contains("SessionCreationPolicy.STATELESS")
-                    || methodBody.contains("STATELESS");
+            boolean isStateless = method.findAll(MethodCallExpr.class).stream()
+                    .anyMatch(call -> call.getNameAsString().equals("sessionCreationPolicy")
+                            && call.getArguments().stream().anyMatch(arg -> arg.toString().contains("STATELESS")))
+                    || method.findAll(FieldAccessExpr.class).stream()
+                    .anyMatch(fa -> fa.getNameAsString().equals("STATELESS")
+                            && fa.getScope().toString().contains("SessionCreationPolicy"));
 
             if (!isStateless) {
                 int startLine = method.getBegin().map(p -> p.line).orElse(0);
