@@ -401,16 +401,23 @@ public class ArchitectureReviewEngine {
     }
 
     private boolean matchesFqcn(InspectedSource candidate, String simpleName, String fqcn) {
-        if (candidate == null) return false;
+        if (candidate == null || simpleName == null || fqcn == null) return false;
         String candidatePkg = candidate.getPackageName() != null ? candidate.getPackageName() : "";
-        String fullClass = candidatePkg.isEmpty() ? simpleName : candidatePkg + "." + simpleName;
-        if (fullClass.equals(fqcn)) {
-            return true;
+        String primaryName = candidate.getPrimaryClassName();
+        if (primaryName != null) {
+            String primaryFqcn = candidatePkg.isEmpty() ? primaryName : candidatePkg + "." + primaryName;
+            if (primaryFqcn.equals(fqcn) && matchesSimpleName(candidate, simpleName)) {
+                return true;
+            }
         }
-        String primaryFqcn = candidatePkg.isEmpty()
-                ? candidate.getPrimaryClassName()
-                : candidatePkg + "." + candidate.getPrimaryClassName();
-        return primaryFqcn.equals(fqcn) && matchesSimpleName(candidate, simpleName);
+        for (ClassOrInterfaceDeclaration clazz : candidate.getClassDeclarations()) {
+            String className = clazz.getNameAsString();
+            String classFqcn = candidatePkg.isEmpty() ? className : candidatePkg + "." + className;
+            if (classFqcn.equals(fqcn) && simpleName.equals(className)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private boolean matchesSimpleName(InspectedSource candidate, String simpleName) {
