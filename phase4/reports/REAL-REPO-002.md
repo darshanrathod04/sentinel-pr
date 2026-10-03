@@ -263,3 +263,31 @@ Across all 8 controllers, exactly 22 endpoint instances expose JPA database enti
 | **True Negatives (`TN`) Rules** | 10 | 10 | **0 (Unchanged)** |
 | **Total True Positives (`TP`)** | 9 | 25 | **+16** |
 | **ARCH-002 Recall** | 27.27% | **100.00%** | **+72.73%** |
+
+---
+
+## 9. Phase 4A.10: SEC-006 FP-1 Fix Validation (DataflowTracker Scalar Filtering)
+
+### 9.1 Summary of Changes & Root Cause Allocation
+- **FP-1 Root Cause:** `DataflowTracker.analyzeMethodInternal()` unconditionally seeded numeric parameters (`Long id`) into `activeTaint` without evaluating declared parameter types, generating a spurious multi-hop taint trace (`StudentController.uploadPhoto(id) -> fileName -> Paths.get(...)`) and inflating finding confidence to 1.0.
+- **Production Fix Applied:** Modified [`DataflowTracker.java`](../../src/main/java/com/sentinelpr/core/analysis/DataflowTracker.java) to introduce type-aware parameter source classification via `SAFE_SCALAR_TYPES`:
+  - Primitives: `int`, `long`, `short`, `byte`, `float`, `double`, `boolean`, `char`
+  - Standard Boxed Wrappers: `Integer`, `Long`, `Short`, `Byte`, `Float`, `Double`, `Boolean`, `Character`
+  - Specialized Numeric & Structured Identifiers: `BigInteger`, `BigDecimal`, `UUID`
+- **FP-1 Remaining Emission After Fix:** In `StudentController.java:116`, the spurious taint trace was successfully eliminated. However, because `uploadDirectory + fileName` is a binary string concatenation (`BinaryExpr`), `ReasoningFacade`'s zero-taint fallback still emits the finding at base confidence (0.81).
+- **FP-2 Root Cause:** `ReasoningFacade.evaluatePathTraversal()` unconditionally emits `CRITICAL` findings for any binary `+` expression (`hasStringPathArgument`) even when `DataflowTracker` reports zero taint flows (untouched in Phase 4A.10, scheduled for Phase 4A.11).
+- **Test Suite Added:** Added comprehensive permanent regression tests in [`Phase4A9Sec006PrecisionInvestigationTest.java`](../../src/test/java/com/sentinelpr/reproduction/Phase4A9Sec006PrecisionInvestigationTest.java) covering Cases A through J and positive/negative controls (16 tests passing).
+
+### 9.2 Measured SCC Re-Scan Results (Pinned Commit: `2ab5c482e3a7fed2a0440ff27c247cdf0a9bec04`)
+- **Total Findings Detected:** 27
+- **ARCH-002 (Leaky Abstraction):** 22 findings (**100% TP, 0 FN** — Strictly invariant)
+- **ARCH-003 (Non-Deterministic Calls):** 1 finding (**TP** — Strictly invariant)
+- **SEC-006 (Path Traversal):** 4 findings
+  1. `StudentController.java:161` (`uploadResume`): **0.99 (TP)** — True vulnerability with untrusted `file.getOriginalFilename()`.
+  2. `EmailNotificationService.java:126` (`sendJobApplication`): **0.82 (TP)** — True vulnerability with user-provided path.
+  3. `StudentController.java:116` (`uploadPhoto`): **0.81 (FP)** — False positive with `@PathVariable Long id`. Note: The false taint trace was completely eliminated by `DataflowTracker`. The remaining emission at base confidence is solely due to the `ReasoningFacade` zero-taint fallback.
+  4. `GlobalExceptionHandler.java:75` (`uploadSignature`): **0.81 (FP)** — Constant concatenation without user taint (FP-2 root cause: `ReasoningFacade` zero-taint fallback on binary '+').
+
+### 9.3 Metric Summary
+- **Before Fix:** SEC-006 = 4 findings (2 TP, 2 FP); `StudentController.uploadPhoto` had a spurious taint trace and elevated confidence (1.0).
+- **After Fix:** SEC-006 = 4 findings (2 TP, 2 FP); spurious taint trace eliminated; confidence lowered to base (0.81). Complete suppression of both remaining false positives awaits Phase 4A.11 zero-taint gating in `ReasoningFacade`.

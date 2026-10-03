@@ -52,6 +52,12 @@ public class DataflowTracker {
             "File", "RandomAccessFile"
     );
 
+    private static final Set<String> SAFE_SCALAR_TYPES = Set.of(
+            "int", "long", "short", "byte", "float", "double", "boolean", "char",
+            "Integer", "Long", "Short", "Byte", "Float", "Double", "Boolean", "Character",
+            "BigInteger", "BigDecimal", "UUID"
+    );
+
     /**
      * Analyzes all methods in an inspected source for taint flows.
      */
@@ -133,11 +139,16 @@ public class DataflowTracker {
                     .filter(p -> seededParamName != null && p.getNameAsString().equals(seededParamName))
                     .findFirst()
                     .orElse(method.getParameter(0));
-            String paramName = targetParam.getNameAsString();
-            activeTaint.put(paramName, initialSource);
-            propagationHistory.put(paramName, new ArrayList<>(initialHistory != null ? initialHistory : List.of()));
+            if (!isSafeScalarType(targetParam)) {
+                String paramName = targetParam.getNameAsString();
+                activeTaint.put(paramName, initialSource);
+                propagationHistory.put(paramName, new ArrayList<>(initialHistory != null ? initialHistory : List.of()));
+            }
         } else {
             for (Parameter param : method.getParameters()) {
+                if (isSafeScalarType(param)) {
+                    continue;
+                }
                 String paramName = param.getNameAsString();
                 int line = param.getBegin().map(p -> p.line).orElse(0);
                 String qualifiedName = className + "." + method.getNameAsString() + "(" + paramName + ")";
@@ -528,6 +539,26 @@ public class DataflowTracker {
             return filename.substring(0, filename.length() - 5);
         }
         return filename;
+    }
+
+    private boolean isSafeScalarType(Parameter param) {
+        if (param == null || param.getType() == null) {
+            return false;
+        }
+        com.github.javaparser.ast.type.Type type = param.getType();
+        if (type.isArrayType()) {
+            return false;
+        }
+        String typeName = type.asString().trim();
+        if (typeName.contains(" ")) {
+            typeName = typeName.substring(typeName.lastIndexOf(' ') + 1);
+        }
+        int lastDot = typeName.lastIndexOf('.');
+        String simpleName = (lastDot >= 0 && lastDot < typeName.length() - 1)
+                ? typeName.substring(lastDot + 1)
+                : typeName;
+
+        return SAFE_SCALAR_TYPES.contains(simpleName);
     }
 
     private TaintSource detectDirectSource(Expression expr) {
