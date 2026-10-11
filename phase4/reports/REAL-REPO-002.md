@@ -389,3 +389,75 @@ A full live scan was executed against the pinned Smart Campus Connect repository
 ### 10.7 Current Limitations & Future Work
 1. **Intra-Procedural Scope:** Constant resolution analyzes the declaring method body and class-level fields. It does not resolve constants across inter-procedural call returns from external utility classes (e.g. `PathUtils.getBaseDir()`).
 2. **Conservative Fail-Secure Stance:** Dynamic string operations (`String.format`, `.substring()`, `.replace()`) are treated as unknown dynamic expressions and retained conservatively if zero taint is detected, avoiding false negatives on obfuscated traversal payloads.
+
+---
+
+## 11. Phase 4A.12 Post-Push Revalidation (Commit `11008b7918d687f38c4cdf3b5eb2e59554d2d2427`)
+
+### 11.1 Revalidation Overview & Sandbox Verification
+As part of Phase 4A.12 post-push revalidation, SentinelPR production commit `11008b7918d687f38c4cdf3b5eb2e59554d2d2427` (synchronized with `origin/main`) was independently audited against `Smart Campus Connect` (`SSC-BACKEND`) at pinned commit `2ab5c482e3a7fed2a0440ff27c247cdf0a9bec04` in an isolated sandbox.
+
+### 11.2 Audit Execution Details
+- **SentinelPR Engine Commit:** `11008b7918d687f38c4cdf3b5eb2e59554d2d2427`
+- **Target Repository Pinned Commit:** `2ab5c482e3a7fed2a0440ff27c247cdf0a9bec04`
+- **Working Tree State:** Completely clean, zero modifications.
+- **Audit CLI Command:**
+  ```bash
+  mvn exec:java -Dexec.mainClass="com.sentinelpr.cli.SentinelCliRunner" \
+    -Dexec.args="<scratch>/smart-campus-connect --format json"
+  ```
+- **CLI Report ID:** `REV-83435759`
+- **Raw JSON SHA256:** `7373f86f1d6480782d51a873647643c50afb62b93a067e9fadec2e30499b85d3`
+- **Source Files Scanned:** 41 (40 production compilation units + 1 test class)
+- **Engine Execution Status:** `SUCCESS` (exit code 0; 0 exceptions, 0 parse errors)
+
+### 11.3 Independent Finding Inventory & Ground Truth
+SentinelPR reported exactly **25 vulnerability findings**, 0 suppressed findings, and synthesized 8 patches. Every finding was independently verified against ground truth:
+
+1. **`ARCH-002-LEAKY-ABSTRACTION` (22 Findings — All Verified True Positives):**
+   - `AdminAuditController.java`: `getPendingAudits` (line 36, `SkillAudit`), `getSystemPulse` (line 47, `ActivityLog`), `getAllPartners` (line 79, `Partner`)
+   - `AuthController.java`: `registerStudent` (line 46, `Student`)
+   - `EventController.java`: `getAllEvents` (line 31, `Event`), `createEvent` (line 35, `Event`), `getRegisteredStudents` (line 43, `Student`)
+   - `InternshipController.java`: `getAllInternships` (line 25, `Internship`), `createInternship` (line 34, `Internship`), `searchBySkills` (line 43, `Internship`), `getInternshipApplicants` (line 75, `Student`)
+   - `PartnerController.java`: `registerPartner` (line 64, `Partner`), `getPendingPartners` (line 93, `Partner`), `getWatchlist` (line 138, `Watchlist`), `addToWatchlist` (line 151, `Watchlist`)
+   - `StudentController.java`: `getAllStudents` (line 55, `Student`), `getTopContributors` (line 70, `Student`), `getStudentById` (line 75, `Student`), `syncStudent` (line 85, `Student`), `registerStudent` (line 335, `Student`)
+   - `WalletController.java`: `syncWallet` (line 45, `Student`), `addExperience` (line 50, `Student`)
+   - **Ground Truth Result:** **22 TP / 0 FP / 0 FN** (100% precision & recall).
+
+2. **`SEC-006-PATH-TRAVERSAL` (2 Findings — Both Verified True Positives, Zero False Positives):**
+   - `StudentController.java:161` (`uploadResume`): `Paths.get(UPLOAD_DIR, resumeFile.getOriginalFilename())` directly incorporates untrusted user filename taint. **Verified TP** (Confidence: 0.99).
+   - `EmailNotificationService.java:126` (`sendJobApplication`): `new File(resumePath)` accepts caller-provided `resumePath` parameter directly into file attachment sink. **Verified TP** (Confidence: 0.95).
+   - `StudentController.java:116` (`uploadPhoto`): `@PathVariable Long id` is correctly identified as a safe scalar; zero taint reaches sink. **Verified SUPPRESSED (0 FP)**.
+   - `GlobalExceptionHandler.java:75` (`uploadSignature`): Static constant expression `uploadDir + "signature.png"` is provably constant with zero taint. **Verified SUPPRESSED (0 FP)**.
+   - **Ground Truth Result:** **2 TP / 0 FP / 0 FN** (100% precision & recall).
+
+3. **`ARCH-003-NON-DETERMINISTIC-CALLS` (1 Finding — Verified True Positive):**
+   - `EmailNotificationService.java:66` (`sendPartnerOTP`): `new Random().nextInt(999999)` used in `@Service` for generating authentication OTP codes (violates deterministic testing and cryptographic security CWE-330). **Verified TP** (Confidence: 0.98).
+
+4. **Remaining 10 Security & Architectural Rules:**
+   - Evaluated across all 41 compilation units: `SEC-001` through `SEC-005`, `SEC-007` through `SEC-010`, and `ARCH-001`.
+   - Result: Exactly 0 findings emitted (**10 TNs**). Zero spurious warnings, zero regressions.
+
+### 11.4 Automated Patch Synthesis & Verification Status
+- **Total Synthesized Patches:** 8
+  - 7 Controller Patches (`AdminAuditController`, `AuthController`, `EventController`, `InternshipController`, `PartnerController`, `StudentController`, `WalletController`): Status `DEFERRED_TO_MULTI_FILE_PLAN`. SentinelPR correctly recognizes that single-file AST replacement cannot create the required DTOs, mappers, and service contracts across files.
+  - 1 Service Patch (`EmailNotificationService.java`): Status `SUCCESS`, `astValid: true`, `verified: true`. Automated remediation safely applied without syntax breakage or compiler regressions.
+
+### 11.5 Complete Multi-Phase Progress & Regression Scorecard
+
+| Rule / Metric | Phase 4A.6 (Baseline) | Phase 4A.8 (ARCH-002 Fix) | Phase 4A.10 (FP-1 Fix) | Phase 4A.11 (FP-2 Gating) | Phase 4A.12 (Post-Push Verification) | Net Metric Shift |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Total Findings** | 11 | 27 | 27 | 25 | **25** | **+14** (TPs recovered, FPs eliminated) |
+| **ARCH-002 TP** | 6 | 22 | 22 | 22 | **22** | **+16** |
+| **ARCH-002 FN** | 16 | 0 | 0 | 0 | **0** | **-16** |
+| **SEC-006 TP** | 2 | 2 | 2 | 2 | **2** | **0** (Preserved) |
+| **SEC-006 FP** | 2 | 2 | 2 | 0 | **0** | **-2** (Eliminated) |
+| **ARCH-003 TP** | 1 | 1 | 1 | 1 | **1** | **0** (Preserved) |
+| **Safe Rules (TN)** | 10 | 10 | 10 | 10 | **10** | **0** (Unchanged) |
+| **Overall TP** | 9 | 25 | 25 | 25 | **25** | **+16** |
+| **Overall FP** | 2 | 2 | 2 | 0 | **0** | **-2** |
+| **Overall FN** | 16 | 0 | 0 | 0 | **0** | **-16** |
+| **Overall Precision** | 81.8% (9/11) | 92.6% (25/27) | 92.6% (25/27) | 100.0% (25/25) | **100.0% (25/25)** | **+18.2%** |
+| **Overall Recall** | 36.0% (9/25) | 100.0% (25/25) | 100.0% (25/25) | 100.0% (25/25) | **100.0% (25/25)** | **+64.0%** |
+| **Uncertain Findings** | 0 | 0 | 0 | 0 | **0** | **0** |
+- **Observation Record:** [`phase4/observations/REAL-REPO-002-PHASE4A12.json`](file:///d:/sentinel-pr/phase4/observations/REAL-REPO-002-PHASE4A12.json)

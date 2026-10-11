@@ -222,6 +222,7 @@
     "Repository cloned to isolated scratch directory outside SentinelPR workspace.",
     "Static AST and dataflow inspection completed without runtime code execution or database connection.",
     "Zero production findings detected by engine; human ground-truth audit confirmed 12 True Negatives across security and architectural rules.",
-    "Engine identified 1 False Negative (ARCH-002) due to single-file naming heuristic in ArchitectureReviewEngine.isEntityType(), which failed to resolve @Entity across files for entity class 'Task'."
+    "Engine identified 1 False Negative (ARCH-002) due to single-file naming heuristic in ArchitectureReviewEngine.isEntityType(), which failed to resolve @Entity across files for entity class 'Task'.",
+    "Phase 4A.12 Post-Push Revalidation (commit 11008b7918d687f38c4cdf3b5eb2e59554d2d2427): Cross-file JPA entity resolution active. SentinelPR detected all 3 vulnerable endpoints exposing Task in TaskController (addtask:18, getTasks:23, updateTask:28), eliminating previous False Negative. deleteTask:33 (@PathVariable Long id) produces zero SEC-006 findings (safe scalar). Results: 3 detections (3 ARCH-002 TP, 0 FP, 0 FN, 12 TN). See REAL-REPO-001-PHASE4A12.json."
   ]
 }

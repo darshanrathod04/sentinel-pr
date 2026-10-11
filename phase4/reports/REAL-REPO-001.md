@@ -246,3 +246,60 @@ All other 12 rules (SEC-001 through SEC-010, ARCH-001, and ARCH-003) were evalua
 In accordance with audit integrity requirements, the initial false negative observation is preserved:
 - **Historical FN Observation:** [`phase4/observations/REAL-REPO-001/OBS-0001-ARCH-002-FN.json`](file:///d:/sentinel-pr/phase4/observations/REAL-REPO-001/OBS-0001-ARCH-002-FN.json)
 - **Post-Fix Validation Observation:** [`phase4/observations/REAL-REPO-001/OBS-0002-ARCH-002-FIX-VALIDATION.json`](file:///d:/sentinel-pr/phase4/observations/REAL-REPO-001/OBS-0002-ARCH-002-FIX-VALIDATION.json)
+
+---
+
+## 9. Phase 4A.12 Post-Push Revalidation (Commit `11008b7918d687f38c4cdf3b5eb2e59554d2d2427`)
+
+### 9.1 Overview & Scope
+As part of Phase 4A.12, SentinelPR production commit `11008b7918d687f38c4cdf3b5eb2e59554d2d2427` (fully synchronized with `origin/main`) was revalidated against `Todo-Application` at pinned commit `bb4b69a50ee814d00129fdbe2286eeaa048a078f` in an isolated sandbox.
+
+### 9.2 Execution & Verification Details
+- **SentinelPR Engine Commit:** `11008b7918d687f38c4cdf3b5eb2e59554d2d2427`
+- **Target Repository Pinned Commit:** `bb4b69a50ee814d00129fdbe2286eeaa048a078f`
+- **Working Tree State:** Completely clean, zero local modifications.
+- **Audit CLI Command:**
+  ```bash
+  mvn exec:java -Dexec.mainClass="com.sentinelpr.cli.SentinelCliRunner" \
+    -Dexec.args="<scratch>/Todo-Application --format json"
+  ```
+- **CLI Report ID:** `REV-6b5af5fe`
+- **Raw JSON SHA256:** `9bea90a7fc3b02dd8a8be14e1c8a863003a9964491b75ca8e894edcc52e11605`
+- **Files Scanned:** 6 (5 production Java source files + 1 test class)
+- **Engine Status:** `SUCCESS` (exit code 0; 0 parser exceptions, 0 runtime failures)
+
+### 9.3 Detected Findings & Ground-Truth Verification
+SentinelPR detected exactly 3 findings, all classified as True Positives under `ARCH-002-LEAKY-ABSTRACTION`:
+
+| Finding ID | Method | Line | Vulnerable Snippet | Rule | Ground Truth | Classification |
+| :--- | :--- | :---: | :--- | :--- | :---: | :---: |
+| `FND-7ed4bd1e` | `addtask` | 18 | `public Task addtask(@RequestBody Task task)` | `ARCH-002` | VULNERABLE | **TP** |
+| `FND-a43a5307` | `getTasks` | 23 | `public List<Task> getTasks()` | `ARCH-002` | VULNERABLE | **TP** |
+| `FND-33c55dc8` | `updateTask` | 28 | `public Task updateTask(@PathVariable Long id, @RequestBody Task taskDetails)` | `ARCH-002` | VULNERABLE | **TP** |
+
+### 9.4 Verification of Safe Constructs & Regression Absence
+1. **`SEC-006` Path Traversal Safety:**
+   - In `TaskController.java:33`: `deleteTask(@PathVariable Long id)` accepts a numeric identifier `Long id`.
+   - SentinelPR's scalar gating and dataflow tracker properly identify `Long` as a non-traversable safe scalar.
+   - Result: Exactly 0 findings under `SEC-006` (**TN**).
+2. **Remaining 11 Rules:**
+   - Evaluated across all 6 compilation units: `SEC-001` through `SEC-005`, `SEC-007` through `SEC-010`, `ARCH-001`, and `ARCH-003`.
+   - Result: Exactly 0 findings emitted (**11 TNs**). Zero regressions detected.
+3. **Automated Remediation Status:**
+   - Generated patch status: `DEFERRED_TO_MULTI_FILE_PLAN`.
+   - SentinelPR correctly identified that refactoring leaky abstraction in `TaskController` requires coordinated multi-file DTO, Mapper, and Service synthesis.
+
+### 9.5 Comparative Scorecard (Baseline Phase 4A.2 vs. Post-Push Phase 4A.12)
+
+| Metric | Phase 4A.2 Baseline (`c051ebb8`) | Phase 4A.12 Revalidation (`11008b79`) | Shift / Delta | Notes |
+| :--- | :---: | :---: | :---: | :--- |
+| **Total Detections** | 0 | 3 | +3 | Cross-file entity resolution active |
+| **True Positives (`TP`)** | 0 | 3 (1 unique rule) | +3 | `TaskController` exposing `Task` |
+| **False Positives (`FP`)** | 0 | 0 | 0 | Zero spurious findings |
+| **False Negatives (`FN`)** | 1 (`ARCH-002`) | 0 | -1 | False negative permanently resolved |
+| **True Negatives (`TN`)** | 12 rules | 12 rules | 0 | 100% precision across safe patterns |
+| **Uncertain (`UNCERTAIN`)** | 0 | 0 | 0 | Ground truth 100% conclusive |
+| **Precision** | N/A | **100.0%** (3/3) | +100.0% | Denominator valid |
+| **Recall** | 0.0% (0/1) | **100.0%** (3/3) | +100.0% | Complete discovery of vulnerable endpoints |
+| **Suppressed Findings**| 0 | 0 | 0 | No suppression filters invoked |
+- **Observation Record:** [`phase4/observations/REAL-REPO-001-PHASE4A12.json`](file:///d:/sentinel-pr/phase4/observations/REAL-REPO-001-PHASE4A12.json)
