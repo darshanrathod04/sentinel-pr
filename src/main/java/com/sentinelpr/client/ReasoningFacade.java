@@ -1,17 +1,24 @@
 package com.sentinelpr.client;
 
 import com.github.javaparser.ast.Node;
+import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
 import com.github.javaparser.ast.body.FieldDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
 import com.github.javaparser.ast.body.Parameter;
 import com.github.javaparser.ast.body.VariableDeclarator;
 import com.github.javaparser.ast.expr.AssignExpr;
 import com.github.javaparser.ast.expr.BinaryExpr;
+import com.github.javaparser.ast.expr.EnclosedExpr;
 import com.github.javaparser.ast.expr.Expression;
+import com.github.javaparser.ast.expr.FieldAccessExpr;
+import com.github.javaparser.ast.expr.LiteralExpr;
 import com.github.javaparser.ast.expr.MethodCallExpr;
 import com.github.javaparser.ast.expr.NameExpr;
+import com.github.javaparser.ast.expr.NullLiteralExpr;
 import com.github.javaparser.ast.expr.ObjectCreationExpr;
 import com.github.javaparser.ast.expr.StringLiteralExpr;
+import com.github.javaparser.ast.expr.TextBlockLiteralExpr;
+import com.github.javaparser.ast.expr.ThisExpr;
 import com.github.javaparser.ast.expr.UnaryExpr;
 import com.github.javaparser.ast.stmt.CatchClause;
 import com.github.javaparser.ast.stmt.ReturnStmt;
@@ -580,6 +587,13 @@ public class ReasoningFacade {
                     .filter(f -> f.getSink().getLine() == line && !f.isSanitized())
                     .findFirst();
 
+            boolean allArgsSafe = creation.getArguments().stream()
+                    .allMatch(arg -> isPathArgumentSafe(arg, source, enclosingMethod));
+
+            if (matching.isEmpty() && allArgsSafe) {
+                continue;
+            }
+
             String rationale = "User-controlled input flows directly into file/path constructor without path normalization (.normalize() / getCanonicalFile()) or directory containment checks. Enables Path Traversal (CWE-22 / OWASP A01:2021) allowing unauthorized filesystem access.";
             double confidence = 0.95;
             if (matching.isPresent()) {
@@ -627,6 +641,13 @@ public class ReasoningFacade {
                 Optional<TaintFlow> matching = flows.stream()
                         .filter(f -> f.getSink().getLine() == line && !f.isSanitized())
                         .findFirst();
+
+                boolean allArgsSafe = call.getArguments().stream()
+                        .allMatch(arg -> isPathArgumentSafe(arg, source, enclosingMethod));
+
+                if (matching.isEmpty() && allArgsSafe) {
+                    continue;
+                }
 
                 String rationale = "User-controlled path input passed to Path." + name + "() without normalization (.normalize()) or directory containment validation (startsWith(baseDir)). Enables Path Traversal (CWE-22 / OWASP A01:2021).";
                 double confidence = 0.95;
@@ -784,6 +805,30 @@ public class ReasoningFacade {
         return false;
     }
 
+    private static final Set<String> SAFE_SCALAR_TYPES = Set.of(
+            "int", "long", "short", "byte", "float", "double", "boolean", "char",
+            "Integer", "Long", "Short", "Byte", "Float", "Double", "Boolean", "Character",
+            "BigInteger", "BigDecimal", "UUID"
+    );
+
+    public boolean isSafeScalarType(String typeName) {
+        if (typeName == null || typeName.isBlank()) {
+            return false;
+        }
+        String simpleName = typeName.contains(".")
+                ? typeName.substring(typeName.lastIndexOf('.') + 1)
+                : typeName;
+        return SAFE_SCALAR_TYPES.contains(simpleName);
+    }
+
+    private boolean isStringType(String type) {
+        if (type == null) {
+            return false;
+        }
+        String simple = type.contains(".") ? type.substring(type.lastIndexOf('.') + 1) : type;
+        return "String".equals(simple) || "CharSequence".equals(simple);
+    }
+
     private boolean hasStringPathArgument(List<Expression> args, MethodDeclaration method) {
         if (args == null || method == null) {
             return false;
@@ -792,15 +837,328 @@ public class ReasoningFacade {
             if (arg instanceof BinaryExpr binary && binary.getOperator() == BinaryExpr.Operator.PLUS) {
                 return true;
             }
+            if (arg instanceof MethodCallExpr call) {
+                if ("toFile".equals(call.getNameAsString())) {
+                    continue;
+                }
+                return true;
+            }
+            if (arg instanceof FieldAccessExpr) {
+                return true;
+            }
             if (arg instanceof NameExpr nameExpr) {
                 String varName = nameExpr.getNameAsString();
                 for (Parameter param : method.getParameters()) {
                     if (param.getNameAsString().equals(varName)) {
-                        String type = param.getTypeAsString();
-                        if ("String".equals(type) || "CharSequence".equals(type)) {
+                        if (isStringType(param.getTypeAsString())) {
                             return true;
                         }
                     }
+                }
+                for (VariableDeclarator varDecl : method.findAll(VariableDeclarator.class)) {
+                    if (varDecl.getNameAsString().equals(varName)) {
+                        if (isStringType(varDecl.getTypeAsString())) {
+                            return true;
+                        }
+                    }
+                }
+                ClassOrInterfaceDeclaration cid = method.findAncestor(ClassOrInterfaceDeclaration.class).orElse(null);
+                if (cid != null) {
+                    for (FieldDeclaration field : cid.getFields()) {
+                        for (VariableDeclarator varDecl : field.getVariables()) {
+                            if (varDecl.getNameAsString().equals(varName)) {
+                                if (isStringType(varDecl.getTypeAsString())) {
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    private boolean isEnclosingClassScope(Expression scope, InspectedSource source) {
+        if (scope == null || source == null) {
+            return false;
+        }
+        if (scope instanceof ThisExpr) {
+            return true;
+        }
+        String scopeStr = scope.toString().trim();
+        String primaryClass = source.getPrimaryClassName();
+        if (primaryClass != null && !primaryClass.isBlank()) {
+            if (scopeStr.equals(primaryClass)) {
+                return true;
+            }
+            String simplePrimary = primaryClass.contains(".")
+                    ? primaryClass.substring(primaryClass.lastIndexOf('.') + 1)
+                    : primaryClass;
+            if (scopeStr.equals(simplePrimary)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public boolean isPathArgumentSafe(Expression arg, InspectedSource source, MethodDeclaration enclosingMethod) {
+        return isProvablyConstantPathExpression(arg, source, enclosingMethod)
+                || isPathSafeScalarExpression(arg, source, enclosingMethod);
+    }
+
+    public boolean isProvablyConstantPathExpression(Expression expr, InspectedSource source, MethodDeclaration enclosingMethod) {
+        return isProvablyConstantPathExpression(expr, source, enclosingMethod, new HashSet<>(), 0);
+    }
+
+    private boolean isProvablyConstantPathExpression(Expression expr, InspectedSource source, MethodDeclaration enclosingMethod, Set<String> visitedVars, int depth) {
+        if (expr == null || depth > 20) {
+            return false;
+        }
+
+        if (expr instanceof StringLiteralExpr) {
+            return true;
+        }
+
+        if (expr instanceof TextBlockLiteralExpr) {
+            return true;
+        }
+
+        if (expr instanceof LiteralExpr) {
+            return !(expr instanceof NullLiteralExpr);
+        }
+
+        if (expr instanceof EnclosedExpr enclosed) {
+            return isProvablyConstantPathExpression(enclosed.getInner(), source, enclosingMethod, visitedVars, depth + 1);
+        }
+
+        if (expr instanceof BinaryExpr binary && binary.getOperator() == BinaryExpr.Operator.PLUS) {
+            return isProvablyConstantPathExpression(binary.getLeft(), source, enclosingMethod, visitedVars, depth + 1)
+                    && isProvablyConstantPathExpression(binary.getRight(), source, enclosingMethod, visitedVars, depth + 1);
+        }
+
+        if (expr instanceof NameExpr nameExpr) {
+            String varName = nameExpr.getNameAsString();
+            if (!visitedVars.add(varName)) {
+                return false;
+            }
+            try {
+                if (enclosingMethod != null) {
+                    // DEFECT 3: Method parameters shadow class fields
+                    for (Parameter param : enclosingMethod.getParameters()) {
+                        if (param.getNameAsString().equals(varName)) {
+                            return false;
+                        }
+                    }
+
+                    // Local variable declarations
+                    for (VariableDeclarator varDecl : enclosingMethod.findAll(VariableDeclarator.class)) {
+                        if (varDecl.getNameAsString().equals(varName)) {
+                            if (varDecl.getInitializer().isPresent()) {
+                                if (hasNonConstantAssignment(varName, enclosingMethod, source, visitedVars, depth)) {
+                                    return false;
+                                }
+                                return isProvablyConstantPathExpression(varDecl.getInitializer().get(), source, enclosingMethod, visitedVars, depth + 1);
+                            }
+                            return false;
+                        }
+                    }
+                }
+
+                // DEFECT 1: Class fields must be final and have a constant initializer
+                if (source != null) {
+                    for (FieldDeclaration field : source.getFields()) {
+                        for (VariableDeclarator varDecl : field.getVariables()) {
+                            if (varDecl.getNameAsString().equals(varName)) {
+                                if (field.isFinal() && varDecl.getInitializer().isPresent()) {
+                                    return isProvablyConstantPathExpression(varDecl.getInitializer().get(), source, enclosingMethod, visitedVars, depth + 1);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                return false;
+            } finally {
+                visitedVars.remove(varName);
+            }
+        }
+
+        if (expr instanceof FieldAccessExpr fae) {
+            // DEFECT 2: Scope must be respected. External-object fields must NOT resolve to enclosing class.
+            if (!isEnclosingClassScope(fae.getScope(), source)) {
+                return false;
+            }
+            String fieldName = fae.getNameAsString();
+            if (!visitedVars.add(fieldName)) {
+                return false;
+            }
+            try {
+                if (source != null) {
+                    boolean requiresStatic = !(fae.getScope() instanceof ThisExpr);
+                    for (FieldDeclaration field : source.getFields()) {
+                        for (VariableDeclarator varDecl : field.getVariables()) {
+                            if (varDecl.getNameAsString().equals(fieldName)) {
+                                boolean isConstantField = field.isFinal() && (!requiresStatic || field.isStatic());
+                                if (isConstantField && varDecl.getInitializer().isPresent()) {
+                                    return isProvablyConstantPathExpression(varDecl.getInitializer().get(), source, enclosingMethod, visitedVars, depth + 1);
+                                }
+                            }
+                        }
+                    }
+                }
+                return false;
+            } finally {
+                visitedVars.remove(fieldName);
+            }
+        }
+
+        return false;
+    }
+
+    private boolean hasNonConstantAssignment(String varName, MethodDeclaration method, InspectedSource source, Set<String> visitedVars, int depth) {
+        if (method == null) return false;
+        for (AssignExpr assign : method.findAll(AssignExpr.class)) {
+            if (assign.getTarget() instanceof NameExpr targetName && targetName.getNameAsString().equals(varName)) {
+                if (!isProvablyConstantPathExpression(assign.getValue(), source, method, visitedVars, depth + 1)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    public boolean isPathSafeScalarExpression(Expression expr, InspectedSource source, MethodDeclaration enclosingMethod) {
+        return isPathSafeScalarExpression(expr, source, enclosingMethod, new HashSet<>(), 0);
+    }
+
+    private boolean isPathSafeScalarExpression(Expression expr, InspectedSource source, MethodDeclaration enclosingMethod, Set<String> visitedVars, int depth) {
+        if (expr == null || depth > 20) {
+            return false;
+        }
+
+        if (isProvablyConstantPathExpression(expr, source, enclosingMethod, visitedVars, depth)) {
+            return true;
+        }
+
+        if (expr instanceof EnclosedExpr enclosed) {
+            return isPathSafeScalarExpression(enclosed.getInner(), source, enclosingMethod, visitedVars, depth + 1);
+        }
+
+        if (expr instanceof BinaryExpr binary && binary.getOperator() == BinaryExpr.Operator.PLUS) {
+            return isPathSafeScalarExpression(binary.getLeft(), source, enclosingMethod, visitedVars, depth + 1)
+                    && isPathSafeScalarExpression(binary.getRight(), source, enclosingMethod, visitedVars, depth + 1);
+        }
+
+        if (expr instanceof NameExpr nameExpr) {
+            String varName = nameExpr.getNameAsString();
+            if (!visitedVars.add(varName)) {
+                return false;
+            }
+            try {
+                if (enclosingMethod != null) {
+                    // DEFECT 3: Method parameters shadow class fields
+                    for (Parameter param : enclosingMethod.getParameters()) {
+                        if (param.getNameAsString().equals(varName)) {
+                            return isSafeScalarType(param.getTypeAsString());
+                        }
+                    }
+
+                    // Local variables
+                    for (VariableDeclarator varDecl : enclosingMethod.findAll(VariableDeclarator.class)) {
+                        if (varDecl.getNameAsString().equals(varName)) {
+                            if (isSafeScalarType(varDecl.getTypeAsString())) {
+                                if (hasNonSafeScalarAssignment(varName, enclosingMethod, source, visitedVars, depth)) {
+                                    return false;
+                                }
+                                return true;
+                            }
+                            if (varDecl.getInitializer().isPresent()) {
+                                if (hasNonSafeScalarAssignment(varName, enclosingMethod, source, visitedVars, depth)) {
+                                    return false;
+                                }
+                                return isPathSafeScalarExpression(varDecl.getInitializer().get(), source, enclosingMethod, visitedVars, depth + 1);
+                            }
+                            return false;
+                        }
+                    }
+                }
+
+                // DEFECT 1: Class fields must be final
+                if (source != null) {
+                    for (FieldDeclaration field : source.getFields()) {
+                        for (VariableDeclarator varDecl : field.getVariables()) {
+                            if (varDecl.getNameAsString().equals(varName)) {
+                                if (isSafeScalarType(varDecl.getTypeAsString()) && field.isFinal()) {
+                                    return true;
+                                }
+                                if (field.isFinal() && varDecl.getInitializer().isPresent()) {
+                                    return isPathSafeScalarExpression(varDecl.getInitializer().get(), source, enclosingMethod, visitedVars, depth + 1);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                return false;
+            } finally {
+                visitedVars.remove(varName);
+            }
+        }
+
+        if (expr instanceof FieldAccessExpr fae) {
+            // DEFECT 2: Scope must be respected
+            if (!isEnclosingClassScope(fae.getScope(), source)) {
+                return false;
+            }
+            String fieldName = fae.getNameAsString();
+            if (!visitedVars.add(fieldName)) {
+                return false;
+            }
+            try {
+                if (source != null) {
+                    boolean requiresStatic = !(fae.getScope() instanceof ThisExpr);
+                    for (FieldDeclaration field : source.getFields()) {
+                        for (VariableDeclarator varDecl : field.getVariables()) {
+                            if (varDecl.getNameAsString().equals(fieldName)) {
+                                if (isSafeScalarType(varDecl.getTypeAsString()) && field.isFinal() && (!requiresStatic || field.isStatic())) {
+                                    return true;
+                                }
+                                boolean isConstantField = field.isFinal() && (!requiresStatic || field.isStatic());
+                                if (isConstantField && varDecl.getInitializer().isPresent()) {
+                                    return isPathSafeScalarExpression(varDecl.getInitializer().get(), source, enclosingMethod, visitedVars, depth + 1);
+                                }
+                            }
+                        }
+                    }
+                }
+                return false;
+            } finally {
+                visitedVars.remove(fieldName);
+            }
+        }
+
+        if (expr instanceof MethodCallExpr call) {
+            String methodName = call.getNameAsString();
+            if ("valueOf".equals(methodName) || "toString".equals(methodName)) {
+                if (call.getArguments().size() == 1) {
+                    return isPathSafeScalarExpression(call.getArgument(0), source, enclosingMethod, visitedVars, depth + 1);
+                }
+                if (call.getArguments().isEmpty() && call.getScope().isPresent()) {
+                    return isPathSafeScalarExpression(call.getScope().get(), source, enclosingMethod, visitedVars, depth + 1);
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private boolean hasNonSafeScalarAssignment(String varName, MethodDeclaration method, InspectedSource source, Set<String> visitedVars, int depth) {
+        if (method == null) return false;
+        for (AssignExpr assign : method.findAll(AssignExpr.class)) {
+            if (assign.getTarget() instanceof NameExpr targetName && targetName.getNameAsString().equals(varName)) {
+                if (!isPathSafeScalarExpression(assign.getValue(), source, method, visitedVars, depth + 1)) {
+                    return true;
                 }
             }
         }

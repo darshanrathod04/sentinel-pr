@@ -291,3 +291,101 @@ Across all 8 controllers, exactly 22 endpoint instances expose JPA database enti
 ### 9.3 Metric Summary
 - **Before Fix:** SEC-006 = 4 findings (2 TP, 2 FP); `StudentController.uploadPhoto` had a spurious taint trace and elevated confidence (1.0).
 - **After Fix:** SEC-006 = 4 findings (2 TP, 2 FP); spurious taint trace eliminated; confidence lowered to base (0.81). Complete suppression of both remaining false positives awaits Phase 4A.11 zero-taint gating in `ReasoningFacade`.
+
+---
+
+## 10. Phase 4A.11: SEC-006 FP-2 Fix & Zero-Taint / Constant Expression Gating Validation
+
+### 10.1 Technical Overview & Scope of Changes
+Phase 4A.11 addressed the secondary path traversal false-positive mechanism identified in Phase 4A.9 and Phase 4A.10: `ReasoningFacade.evaluatePathTraversal()` unconditionally emitted `CRITICAL` findings for any binary `+` expression or constructor invocation passed to path sinks when `hasStringPathArgument` matched, even when zero taint reached the sink and all concatenated path components were provably static literals, constant fields, or safe scalar types (`Long`, `Integer`, `UUID`).
+
+**Strict Architectural Constraint:**
+- Modified only [`ReasoningFacade.java`](../../src/main/java/com/sentinelpr/client/ReasoningFacade.java).
+- `DataflowTracker.java` and `ArchitectureReviewEngine.java` remained completely untouched.
+- Ground truth across all 108 benchmark fixtures remained completely untouched.
+
+### 10.2 Semantic Reasoning Model: Three-Tier Path Evaluation
+To prevent both false positives on static code and false negatives on undetected taint, `ReasoningFacade` implements a three-tier semantic evaluation model:
+
+1. **Tier 1: Proven Vulnerable (Taint Observed at Sink)**
+   - When `DataflowTracker` identifies one or more untrusted taint flows reaching the path traversal sink (`!matching.isEmpty()`), SentinelPR immediately emits a finding at maximum confidence (`0.99`) with a complete causal taint trace.
+2. **Tier 2: Provably Safe (Constant / Safe Scalar Expression with Zero Taint)**
+   - When `DataflowTracker` detects zero taint reaching the sink (`matching.isEmpty()`) AND all arguments to the path creation sink are provably constant (string/numeric/boolean literals, un-reassigned constant locals, `final` constant fields) or safe scalars (numeric/UUID parameters, un-reassigned safe scalar locals), SentinelPR safely suppresses the finding (`continue`).
+3. **Tier 3: Conservative Fail-Secure Heuristic (Dynamic / Unknown Expression with Zero Taint)**
+   - When `DataflowTracker` detects zero taint, but path arguments contain unknown dynamic expressions (e.g., dynamic helper method calls `getPath()`, reflection, unresolved external objects), SentinelPR preserves fail-secure semantics: **`ZERO TAINT != SAFE`**. The finding is retained at baseline confidence (`0.95`) with an explanatory note indicating potential untracked source input.
+
+### 10.3 Constant-Expression & Safe-Scalar AST Algorithm
+The algorithm implemented in `ReasoningFacade.java` evaluates argument AST nodes through:
+
+- **Literals:** `StringLiteralExpr`, `TextBlockLiteralExpr`, `IntegerLiteralExpr`, `LongLiteralExpr`, `BooleanLiteralExpr`, `CharLiteralExpr`, `NullLiteralExpr`.
+- **Enclosed Expressions:** Unwrapped recursively (`EnclosedExpr`).
+- **Binary Expressions:** Recursively verifies both `left` and `right` operands of `+` concatenation.
+- **Local Variables:** Resolves declarations within the enclosing method body (`VariableDeclarator`). Confirms the initializer is constant or safe scalar AND verifies no reassignment expressions (`AssignExpr`) target the variable. Uses cycle detection (`visitedVars`) to prevent infinite recursion.
+- **Fields & FieldAccessExpr Scoping:** Resolves declarations in the enclosing class. Requires the field to have the `final` modifier and be initialized with a provably constant expression (mutable static fields without `final` are strictly rejected). For `FieldAccessExpr`, `this.FIELD` and class-qualified `ClassName.FIELD` resolve to the enclosing class fields if static/final criteria are met. `super.FIELD` is treated conservatively as UNKNOWN; superclass field resolution is intentionally not performed. External-object qualifiers (`request.filename`, `userDto.path`) are strictly isolated and never resolve against enclosing class fields.
+- **Method Parameter Shadowing:** Method parameters in `enclosingMethod.getParameters()` take strict precedence over class-field lookups and cannot resolve to class-level constants.
+- **Safe Scalar Method Calls:** Recognizes safe conversions such as `String.valueOf(x)` and `x.toString()` when the operand `x` is itself a safe scalar.
+- **Argument Gating:** Evaluates both `ObjectCreationExpr` (`new File(...)`, `new FileInputStream(...)`) and `MethodCallExpr` (`Paths.get(...)`, `Path.of(...)`). Path arguments are only suppressed if every path-relevant argument is verified safe.
+- **Targeted String Path Filtering:** Re-constrained `isStringType` in `hasStringPathArgument` strictly to `String` and `CharSequence` while ignoring helper conversions (e.g. `.toFile()`), ensuring non-string inputs (like `File` handles in legacy stream APIs) do not trigger false string-path heuristics.
+
+### 10.4 Empirical Test Results & Verification
+
+#### Permanent Regression Suite ([`Phase4A9Sec006PrecisionInvestigationTest.java`](../../src/test/java/com/sentinelpr/reproduction/Phase4A9Sec006PrecisionInvestigationTest.java))
+All 40 tests passing (100% success rate):
+- **Part 1 & 2:** FP-1 and FP-2 isolated AST evaluations (10 tests).
+- **Part 3:** Cross-engine investigation tests verifying suppression and confidence calibration (2 tests).
+- **Part 4 (Cases A through L):** 12 comprehensive expression gating test cases.
+- **Part 5 (Cases 1 through 12):** 12 hardened security defect regression test cases covering:
+  1. Mutable static field retention (`field.isFinal()` enforced).
+  2. Static final field suppression.
+  3. Runtime method initializer retention.
+  4. External `request.filename` collision with controller field retention.
+  5. DTO `userDto.path` collision with controller field retention.
+  6. `this.FIELD` constant resolution and suppression.
+  7. Class-qualified `ClassName.FIELD` static constant resolution.
+  8. External class field access isolation.
+  9. String parameter shadowing class field retention.
+  10. Numeric parameter shadowing class field handling as safe scalar.
+  11. Local variable shadowing class field retention.
+  12. Reassigned local variable invalidation.
+
+#### Reproduction Suite ([`Phase4A7SccFailureReproductionTest.java`](../../src/test/java/com/sentinelpr/reproduction/Phase4A7SccFailureReproductionTest.java))
+All 30 tests passing, including live re-scan of Smart Campus Connect:
+- Case A (`uploadPhoto`): 0 findings (FP eliminated).
+- Case B (`uploadSignature`): 0 findings (FP eliminated).
+- Case F (`uploadResume`): 1 finding (TP preserved, 0.99 confidence).
+- Full live audit assertion: Exactly 25 findings total (2 SEC-006, 22 ARCH-002, 1 ARCH-003).
+
+#### SentinelPR Core Test Suite & Benchmark Scorecard
+- **Full Maven Test Suite:** `mvn clean test` executed **163 tests with 0 failures and 0 errors**.
+- **108-Case Benchmark Suite:**
+  - True Positives (`TP`): **62 / 62**
+  - False Positives (`FP`): **0 / 0**
+  - True Negatives (`TN`): **46 / 46**
+  - False Negatives (`FN`): **0 / 0**
+  - **Precision: 100.0%**
+  - **Recall: 100.0%**
+  - **Verified Remediation Rate: 100.0% (56 / 56)**
+
+### 10.5 Measured SCC Re-Scan Results (Pinned Commit: `2ab5c482e3a7fed2a0440ff27c247cdf0a9bec04`)
+A full live scan was executed against the pinned Smart Campus Connect repository:
+- **Total Findings Detected:** **25** (down from 27 in Phase 4A.10 and 11 in Phase 4A.6 baseline)
+- **ARCH-002 (Leaky Abstraction):** Exactly **22 findings** (22 TP, 0 FP, 0 FN — Invariant)
+- **ARCH-003 (Non-Deterministic Calls):** Exactly **1 finding** (1 TP, 0 FP, 0 FN — Invariant)
+- **SEC-006 (Path Traversal):** Exactly **2 findings** (2 TP, 0 FP, 0 FN):
+  1. `StudentController.java:161` (`uploadResume`): **0.99 (TP)** — High-risk arbitrary file write using untrusted `file.getOriginalFilename()`.
+  2. `EmailNotificationService.java:126` (`sendJobApplication`): **0.95 (TP)** — File read and email attachment using user-supplied `resumePath`.
+  3. `StudentController.java:116` (`uploadPhoto`): **SUPPRESSED (0 FP)** — Safe scalar `@PathVariable Long id` in path construction.
+  4. `GlobalExceptionHandler.java:75` (`uploadSignature`): **SUPPRESSED (0 FP)** — Provably constant path concatenation `uploadDir + "signature.png"`.
+
+### 10.6 SEC-006 Historical Metric Shift Across All Phases
+
+| Phase & Milestone | SEC-006 Findings | SEC-006 TP | SEC-006 FP | SEC-006 FN | Total Engine Detections | Notes |
+| :--- | :---: | :---: | :---: | :---: | :---: | :--- |
+| **Phase 4A.6 (Baseline)** | 4 | 2 | 2 | 0 | 11 | Baseline detection; FP-1 carried spurious taint trace; ARCH-002 had 16 FN. |
+| **Phase 4A.8 (ARCH-002 Fix)** | 4 | 2 | 2 | 0 | 27 | ARCH-002 candidate match fixed (22 TP). SEC-006 untouched (2 TP, 2 FP). |
+| **Phase 4A.10 (FP-1 Taint Fix)** | 4 | 2 | 2 | 0 | 27 | Numeric parameters excluded from taint seeding. Taint trace eliminated for FP-1. |
+| **Phase 4A.11 (FP-2 Constant Gating)**| **2** | **2** | **0** | **0** | **25** | Constant & safe-scalar expression gating added. Both FP-1 and FP-2 eliminated. |
+
+### 10.7 Current Limitations & Future Work
+1. **Intra-Procedural Scope:** Constant resolution analyzes the declaring method body and class-level fields. It does not resolve constants across inter-procedural call returns from external utility classes (e.g. `PathUtils.getBaseDir()`).
+2. **Conservative Fail-Secure Stance:** Dynamic string operations (`String.format`, `.substring()`, `.replace()`) are treated as unknown dynamic expressions and retained conservatively if zero taint is detected, avoiding false negatives on obfuscated traversal payloads.

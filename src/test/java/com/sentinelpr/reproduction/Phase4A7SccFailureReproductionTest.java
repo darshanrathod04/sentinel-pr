@@ -434,8 +434,7 @@ class Phase4A7SccFailureReproductionTest {
             InspectedSource source = inspectionService.inspectSourceCode(code, "StudentController.java");
             List<SecurityFinding> findings = client.reasoning().evaluatePathTraversal(source);
 
-            assertFalse(findings.isEmpty(), "Case A current behavior: SEC-006 false positive is preserved");
-            assertEquals(SecurityRule.PATH_TRAVERSAL, findings.get(0).getRule());
+            assertTrue(findings.isEmpty(), "Case A: SEC-006 false positive on Long id is resolved");
         }
 
         @Test
@@ -465,8 +464,7 @@ class Phase4A7SccFailureReproductionTest {
             InspectedSource source = inspectionService.inspectSourceCode(code, "GlobalExceptionHandler.java");
             List<SecurityFinding> findings = client.reasoning().evaluatePathTraversal(source);
 
-            assertFalse(findings.isEmpty(), "Case B current behavior: SEC-006 false positive is preserved");
-            assertEquals(SecurityRule.PATH_TRAVERSAL, findings.get(0).getRule());
+            assertTrue(findings.isEmpty(), "Case B: SEC-006 false positive on constant concatenation is resolved");
         }
 
         @Test
@@ -576,7 +574,7 @@ class Phase4A7SccFailureReproductionTest {
                     """;
             InspectedSource source = inspectionService.inspectSourceCode(code, "NumericFileController.java");
             List<SecurityFinding> findings = client.reasoning().evaluatePathTraversal(source);
-            assertFalse(findings.isEmpty(), "Case F: Demonstrates current lack of numeric type sanitization in dataflow tracking");
+            assertTrue(findings.isEmpty(), "Case F: SEC-006 false positive on numeric input is resolved");
         }
     }
 
@@ -1008,7 +1006,7 @@ class Phase4A7SccFailureReproductionTest {
             }
 
             assertEquals(22, arch002.size(), "All 22 vulnerable endpoint instances must be detected by ARCH-002");
-            assertEquals(4, sec006.size(), "SEC-006 findings must remain unchanged at 4");
+            assertEquals(2, sec006.size(), "SEC-006 findings are now 2 (2 TP, 0 FP)");
             assertEquals(1, arch003.size(), "ARCH-003 findings must remain unchanged at 1");
         }
     }
