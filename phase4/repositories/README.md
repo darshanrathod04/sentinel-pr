@@ -51,21 +51,22 @@ Each target repository is assigned a stable identifier (`REAL-REPO-xxx`) and tra
 
 ---
 
-### `REAL-REPO-003`: Library Management System
-- **Repository Name:** `library-management-system`
+### `REAL-REPO-003`: College Management Backend
+- **Repository Name:** `College-management-backemd` (re-designated from `library-management-system`)
 - **Owner:** darshanrathod04
-- **Repository URL:** `https://github.com/darshanrathod04/library-management-system`
-- **Language:** Java
-- **Framework:** Spring Boot / Classic Spring MVC, JDBC / Hibernate
-- **Repository Size:** Medium (~20–40 classes)
-- **Module Structure:** Standard controller-service-repository layered application
-- **Database Usage:** SQL database with raw query composition and transactional updates
-- **Authentication/Security Usage:** Form-based login, role permissions
+- **Repository URL:** `https://github.com/darshanrathod04/College-management-backemd.git`
+- **Language:** Java 21 LTS (`<java.version>21</java.version>`)
+- **Framework:** Spring Boot 4.0.6 (`spring-boot-starter-webmvc`, `spring-boot-starter-data-jpa`, `spring-boot-starter-validation`, `springdoc-openapi-starter-webmvc-ui`)
+- **Repository Size:** Medium (30 classes, 1,793 LOC Java)
+- **Module Structure:** Standard controller-service-repository-dto-mapper layered application
+- **Database Usage:** MySQL via Spring Data JPA with derived parameterized queries
+- **Authentication/Security Usage:** Public REST API with OpenAPI/Swagger documentation
 - **Ownership:** Owned / Managed by maintainer
 - **Visibility:** Public
-- **Analysis Date:** Pending Phase 4A execution
-- **Commit SHA Analyzed:** TBD (pinned on execution)
-- **Validation Status:** `PLANNED`
+- **Analysis Date:** 2026-10-12T23:28:00Z
+- **Commit SHA Analyzed:** `38a084e4fdc59bd7b732502bcf06738e1e05e26a`
+- **Validation Status:** `AUDITED`
+- **Catalog Substitution Note:** In Phase 4A.13, `REAL-REPO-003` was originally cataloged as `library-management-system` (`https://github.com/darshanrathod04/library-management-system`). Remote verification returned HTTP 404 and local disk inspection revealed only an unversioned static HTML prototype. To prevent fabricating repository identities or results, `REAL-REPO-003` was formally re-designated to `darshanrathod04/College-management-backemd`, an independently versioned Spring Boot standalone repository pinned at commit `38a084e4fdc59bd7b732502bcf06738e1e05e26a`.
 
 ---
 
