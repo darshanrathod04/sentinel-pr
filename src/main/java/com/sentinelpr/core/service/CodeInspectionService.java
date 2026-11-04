@@ -62,20 +62,33 @@ public class CodeInspectionService {
 
         List<InspectedSource> results = new ArrayList<>();
         try (Stream<Path> stream = Files.walk(directoryPath)) {
-            List<Path> javaFiles = stream
+            List<Path> sourceFiles = stream
                     .filter(Files::isRegularFile)
-                    .filter(p -> p.toString().endsWith(".java"))
+                    .filter(p -> !isIgnoredPath(p))
+                    .filter(com.sentinelpr.core.model.SourceLanguage::isSupported)
                     .toList();
 
-            for (Path javaFile : javaFiles) {
+            for (Path sourceFile : sourceFiles) {
                 try {
-                    results.add(inspectFile(javaFile));
+                    results.add(inspectFile(sourceFile));
                 } catch (Exception e) {
-                    System.err.println("[SentinelPR] Warning: could not parse " + javaFile + ": " + e.getMessage());
+                    System.err.println("[SentinelPR] Warning: could not parse " + sourceFile + ": " + e.getMessage());
                 }
             }
         }
         return results;
+    }
+
+    private static boolean isIgnoredPath(Path path) {
+        for (Path segment : path) {
+            String name = segment.toString();
+            if (name.equals(".git") || name.equals("node_modules") || name.equals(".venv")
+                    || name.equals("venv") || name.equals("__pycache__") || name.equals(".pytest_cache")
+                    || name.equals("target") || name.equals("dist") || name.equals("build")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
