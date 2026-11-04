@@ -127,7 +127,7 @@ ruleSetVersion | policyVersion
 
 **Operator identity** resolves in order: `GITHUB_ACTOR` → `USER` → `USERNAME` → `user.name` system property → `"sentinel-agent"`.
 
-**Documented limitation:** `ExecutionTimings` values are fixed defaults (`parseMs=15, analysisMs=35, patchMs=20, totalMs=70` via `createDefault()`), not measured durations; the wall-clock duration is tracked separately for the Memory Kernel (`MemoryFacade.recordSession(durationMs)`).
+**Measured Phase Timings.** `ExecutionTimings` records real, nanosecond-precision measured durations (`parseMs`, `analysisMs`, `patchMs`, `totalMs`) captured during pipeline execution by `SentinelAuditOrchestrator` and embedded directly into `ReviewReport` and the signed `AuditTrailEntry` for SOC2 / ISO27001 audit integrity. Hardcoded default timings have been eliminated.
 
 ## 6. Compliance Mapping
 

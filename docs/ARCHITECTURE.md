@@ -46,6 +46,7 @@ flowchart TB
         CAL["ConfidenceCalibrator"]
         SUPP["SuppressionManager"]
         DIFF["IncrementalDiffScanner"]
+        MULTILANG["MultiLanguageAnalysisEngine"]
     end
 
     subgraph PatchPipeline
@@ -115,7 +116,7 @@ Implemented in `SentinelAuditOrchestrator.auditPath(...)` and `auditSources(...)
 
 ```mermaid
 flowchart TD
-    S0["Target path (file or directory)"] --> S1["CodeInspectionService.inspectPath()\nJavaParser Java-21 AST → InspectedSource graph"]
+    S0["Target path (file or directory)"] --> S1["CodeInspectionService.inspectPath()\nMulti-language AST (Java, Kotlin, Python, JS/TS) → InspectedSource graph"]
     S1 --> S2{"ReviewSessionMemory.hasPreviousAudit(SHA-256 fingerprint)?"}
     S2 -- "unchanged source" --> S2a["Return cached report (cachedAudit=true)"]
     S2 -- "new/changed" --> S3["RuleEvaluationService.evaluate()\nReasoningFacade SEC rules + ArchitectureReviewEngine ARCH rules\n+ SecretScanningEngine + FrameworkContextAnalyzer + DataflowTracker"]
@@ -167,6 +168,16 @@ Patch strategies (one per rule, in `PatchComposer` / `DeveloperFacade`):
 | SEC-008-HARDCODED-SECRET | Literal → `System.getenv("AWS_ACCESS_KEY_ID")` / `System.getenv("APP_SECRET")` |
 | SEC-009-SPRING-SECURITY-CSRF-DISABLED | Replace flagged snippet with `// CSRF protection preserved` marker (safe rewrite is a developer action) |
 | SEC-010-SPRING-PERMISSIVE-CORS | `@CrossOrigin(origins = "*")` / `addAllowedOrigin("*")` → `https://trusted.domain.com` |
+| SEC-011-XXE | Configure parser securely: `setFeature(http://apache.org/xml/features/disallow-doctype-decl, true)` |
+| SEC-012-SSRF | Host allowlist validation (`isAllowedHost`) before outbound HTTP / socket invocation |
+| SEC-013-JWT-NONE-ALG | Signature verification via `parseClaimsJws(key)` or `JWT.require(algorithm).verify()` |
+| SEC-014-LOG-INJECTION | CRLF sanitization (`replace('\n', '_').replace('\r', '_')`) or parameterized logger |
+| SEC-015-LDAP-INJECTION | Parameterized search filter (`SearchControls`) or `LdapEncoder.filterEncode()` |
+| SEC-016-XPATH-INJECTION | Parameterized query via `XPathVariableResolver` |
+| SEC-017-OPEN-REDIRECT | Target domain allowlist or relative path check (`isValidRedirect`) |
+| SEC-018-WEAK-CRYPTO | Upgrade weak hashes/ciphers (MD5/DES) to SHA-256 and `AES/GCM/NoPadding` |
+| SEC-019-INSECURE-RANDOM | Replace `java.util.Random` with `java.security.SecureRandom` in security contexts |
+| SEC-020-XSS | Contextual HTML encoding (`HtmlUtils.htmlEscape()`) before writing to HTTP response |
 
 Every candidate patch is parsed again after each edit; invalid candidates are rolled back so the composed diff always re-parses as valid Java 21.
 
@@ -249,12 +260,45 @@ sequenceDiagram
 | `POST /api/v1/sentinel/review/github` | Same + `PrReviewCommentBuilder` |
 | `POST /api/v1/sentinel/policy/evaluate` | `PolicyEngine.evaluate` |
 | `GET /api/v1/sentinel/governance/status` | Static governance metadata (SOC2-CC7.1, ISO27001-A.12.6.1, OWASP-TOP-10, CWE-SANS-TOP-25) |
+| `POST /api/v1/github/webhook` | `GitHubWebhookController`, `GitHubWebhookService`, `GitHubWebhookSecurityService`: HMAC-SHA256 signature verification (`X-Hub-Signature-256`), PR lifecycle orchestration (`opened`, `synchronize`, `reopened`), automatic diff retrieval, diff-scoped audit execution, automated review submission (`APPROVE`, `REQUEST_CHANGES`, `COMMENT`), check run status synchronization, and delivery deduplication |
+| `GET /api/v1/github/status` | GitHub App integration health, webhook secret configuration, and processed delivery count |
+| `POST /api/v1/auth/token` | `AuthController`, `ApiKeyAuthenticator`, `JwtTokenService`: Exchanges authorized API key for an RFC 7519 HS256 signed JWT Bearer token |
+| `GET /api/v1/auth/me` | `AuthController`, `SentinelSecurityContext`: Returns active principal identity, roles (`ADMIN`, `REVIEWER`, `VIEWER`), and effective permissions |
 
-## 10. Documented Gaps (as found in the repository)
+## 10. REST API Authentication & Role-Based Access Control (RBAC)
+
+```mermaid
+flowchart TD
+    Req["Incoming HTTP Request"] --> P{"Path is Public?\n(/health, /github/**, /auth/token)"}
+    P -- Yes --> Anon["SentinelPrincipal.anonymous() → Proceed"]
+    P -- No --> AuthH{"Check Auth Headers\n'X-API-Key' or 'Authorization: Bearer <jwt>'"}
+    AuthH -- Missing/Invalid --> 401["HTTP 401 UNAUTHORIZED\n(WWW-Authenticate header)"]
+    AuthH -- "X-API-Key present" --> KeyCheck["ApiKeyAuthenticator.authenticate()\nConstant-time digest matching"]
+    AuthH -- "Bearer JWT present" --> JwtCheck["JwtTokenService.validateAndParse()\nHS256 signature & expiration validation"]
+    KeyCheck & JwtCheck --> RBAC{"Check RBAC\n@RequireRole / @RequirePermission"}
+    RBAC -- "Missing Role/Permission" --> 403["HTTP 403 FORBIDDEN"]
+    RBAC -- "Authorized" --> Ctx["SentinelSecurityContext.setPrincipal()\nExecute Handler Method"]
+    Ctx --> Cleanup["SentinelSecurityContext.clear()"]
+```
+
+- **Authentication Methods**: Dual support for API keys (`X-API-Key`, `Authorization: ApiKey <key>`) and RFC 7519 HS256 JSON Web Tokens (`Authorization: Bearer <token>`).
+- **Timing Defense**: Constant-time verification (`MessageDigest.isEqual`) on all secrets and cryptographic token signatures.
+- **Role Hierarchy**:
+  - `ADMIN`: Unrestricted access to all audit, policy, configuration, and governance endpoints (`AUDIT_EXECUTE`, `POLICY_EVALUATE`, `GOVERNANCE_READ`, `CONFIG_MANAGE`).
+  - `REVIEWER`: Access to `/review`, `/review/sarif`, `/review/github`, `/policy/evaluate`, `/governance/status` (`AUDIT_EXECUTE`, `POLICY_EVALUATE`, `GOVERNANCE_READ`).
+  - `VIEWER`: Read-only access to `/governance/status` and `/health` (`GOVERNANCE_READ`).
+- **Security Context**: Thread-safe `SentinelSecurityContext` with automatic cleanup across request lifecycles.
+
+## 11. Documented Gaps (as found in the repository)
 
 - No `.github/` workflows are committed; `USAGE_GUIDE.md` contains only an example GitHub Actions template.
 - No `examples/` directory; runnable examples live in `src/test/java/com/sentinelpr/fixture/` and `src/test/resources/`.
 - No `LICENSE` file despite the Apache-2.0 badge (see `docs/LICENSE-RECOMMENDATION.md`).
 - No screenshot assets (`docs/screenshots/` does not exist).
 - `apps/sentinel-pr/` contains copies of `README.md` and `USAGE_GUIDE.md` that can drift from the root versions.
-- `AuditTrailEntry.ExecutionTimings` uses fixed default timings (parse 15 / analysis 35 / patch 20 / total 70 ms) rather than measured values.
+- `AuditTrailEntry.ExecutionTimings` records measured phase timings (`parseMs`, `analysisMs`, `patchMs`, `totalMs`) captured during orchestrator execution.
+- **Non-Java Remediation Boundary (Phase 4B.1.1)**: Automated AST patch synthesis and regression verification are restricted to Java 21 LTS sources. Non-Java languages (Kotlin, Python, JavaScript, TypeScript) explicitly yield `MANUAL_REMEDIATION_REQUIRED` with empty unified diffs and `isVerified = false`, failing closed against automated merging or policy bypass.
+- **Python Lexical Analysis Limitations (Phase 4B.1.1)**: Multi-language security analysis in Python is performed via pattern matching and function-scoped lexical inspection (`getEnclosingScopeCodeLines`), not full semantic AST dataflow tracking. Scoped keyword checks filter `#` comments and isolate function blocks, but are path-insensitive, variable-agnostic, and do not model full inter-procedural dataflow.
+- **First-Order Taint Boundary**: `DataflowTracker` halts taint propagation across database repository/entity lookups (`isRepositoryOrEntityLookup`) to avoid first-order overtaint. Second-order stored vulnerabilities are captured at write and read sinks individually rather than via persistent dataflow state.
+- **Tracked Quality Completed (Phase 4B.2)**: Direct integration tests for `PolicyEngine`, `PrReviewCommentBuilder`, and SARIF exporters when evaluating `MANUAL_REMEDIATION_REQUIRED` patches are implemented in `NonJavaRemediationConsumerIntegrationTest`, verifying fail-closed policy enforcement and suppression of invalid synthetic diffs.
+- **GitHub Action PR Diff Contract (Phase 4B.2)**: Action runner enforces three-dot merge-base diff extraction with history fetching and explicit `--diff` pass-through, verified via `ActionIntegrationContractTest`. Explicit failure is mandated on missing or malformed PR diffs without silent fallback.

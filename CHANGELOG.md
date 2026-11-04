@@ -15,10 +15,14 @@ built on Shree AI OS `io.github.darshanrathod04:shree-ai-os:1.0.6-developer-prev
 - Java 21 AST audit pipeline (`SentinelAuditOrchestrator`): inspection → dedup → rule
   evaluation → suppression → diff filtering → baseline reconciliation → causal analysis →
   calibration → patch synthesis → verification → policy → exports.
-- **13 rules**: `SEC-001-FAIL-OPEN` … `SEC-010-SPRING-PERMISSIVE-CORS` (CWE-tagged) and
+- **23 rules**: `SEC-001-FAIL-OPEN` … `SEC-020-XSS` (CWE-tagged) and
   `ARCH-001-CYCLIC-DEPENDENCY`, `ARCH-002-LEAKY-ABSTRACTION`, `ARCH-003-NON-DETERMINISTIC-CALL`.
-- Intra-procedural taint & dataflow tracking (`DataflowTracker`) with sanitizer awareness and
-  cross-file context (`TaintSource`, `TaintSink`, `TaintFlow`).
+- Inter-procedural multi-hop taint & dataflow tracking (`DataflowTracker`): recurses through 3+ method
+  calls, resolves interface-to-implementation boundaries, prevents recursion loops via parameter-aware
+  signatures, and tracks untrusted sources reaching command execution, SQL, file I/O, SSRF, LDAP, and XPath sinks.
+- Multi-language AST inspection and security analysis (`com.sentinelpr.core.analysis.multilang`):
+  support for Kotlin (`.kt`, `.kts`), Python (`.py`, `.pyw`), and JavaScript/TypeScript (`.js`, `.ts`, `.tsx`, `.mjs`)
+  via `SourceLanguage`, `MultiLanguageSourceParser`, and `MultiLanguageAnalysisEngine`.
 - Secret scanning (`SecretScanningEngine`): AWS keys, PEM private keys, credential
   assignments, Shannon-entropy scoring (≥ 3.2), placeholder whitelists, secret redaction.
 - Spring context analysis (`FrameworkContextAnalyzer`): CSRF-disabled and wildcard-CORS detection.
@@ -27,6 +31,9 @@ built on Shree AI OS `io.github.darshanrathod04:shree-ai-os:1.0.6-developer-prev
 - Calibrated confidence (`ConfidenceCalibrator`): deterministic 4-factor model
   (taint 0.35 / AST precision 0.30 / sanitizer absence 0.20 / reachability 0.15),
   threshold 0.70, `ExploitabilityIndex` ranks 1–5.
+- Adaptive Bayesian Feedback Learning (`com.sentinelpr.core.analysis.calibration.feedback`): Beta-Binomial conjugate updating (alpha=4.0, beta=1.0) driven by reviewer feedback (`CONFIRMED_TRUE_POSITIVE`, `REJECTED_FALSE_POSITIVE`, `ACCEPTED_RISK`), combining 30% global rule precision with 70% localized pattern matching (`ruleId::class#method`), dynamic confidence boosts and penalties clamped to [-0.35, +0.10], automatic suppression of noisy false-positive heuristics as `LOW_CONFIDENCE_HEURISTIC` (< 0.70), disk persistence (`feedback-store.json`), and REST APIs (`POST /api/v1/sentinel/feedback`, `GET /api/v1/sentinel/feedback/stats`).
+- Enterprise Web Dashboard (`src/main/resources/static`): standalone, air-gapped single-page security web application with 5 real-time panes (Executive KPI Overview, Interactive Code Reviewer & Diff Inspector with one-click feedback buttons, Multi-Repo Fleet Scanner, 23-rule Security Catalog, and SOC2/ISO27001 Audit Trail Viewer).
+- Continuous Watch Mode & Incremental Scan Engine (`com.sentinelpr.core.watch`): recursive filesystem event watcher (`WorkspaceWatchDaemon`) with event debouncing (default 300ms), thread-safe repository state cache (`IncrementalWorkspaceState`), and sub-second incremental re-auditing (`auditIncremental`). Re-parses and re-evaluates only dirty (added, modified, or deleted) files while reusing cached ASTs and findings for untouched files. Supported via CLI (`-w, --watch`, `--debounce <ms>`) and REST APIs (`POST /api/v1/sentinel/watch/start`, `POST /api/v1/sentinel/watch/stop`, `GET /api/v1/sentinel/watch/status`, `POST /api/v1/sentinel/watch/scan`).
 
 ### Added — Patch Pipeline
 
@@ -58,6 +65,8 @@ built on Shree AI OS `io.github.darshanrathod04:shree-ai-os:1.0.6-developer-prev
   with missing-prompt validation (exit code 3).
 - REST API (`/api/v1/sentinel/*`): `/health`, `/review`, `/review/sarif`, `/review/github`,
   `/policy/evaluate`, `/governance/status`.
+- - REST API Authentication & RBAC (`com.sentinelpr.api.auth`): Dual authentication via API Key (`X-API-Key`, `Authorization: ApiKey`) and RFC 7519 HS256 JSON Web Tokens (`Authorization: Bearer`), declarative Role-Based Access Control (`ADMIN`, `REVIEWER`, `VIEWER`) via `@RequireRole` and `@RequirePermission` annotations, constant-time verification against timing attacks, token issuance (`POST /api/v1/auth/token`), and principal introspection (`GET /api/v1/auth/me`).
+- GitHub App webhook receiver (`/api/v1/github/webhook`, `/api/v1/github/status`): HMAC-SHA256 signature verification (`X-Hub-Signature-256`), PR lifecycle orchestration (`opened`, `synchronize`, `reopened`), automatic diff retrieval, diff-scoped audit execution, automated review submission (`APPROVE`, `REQUEST_CHANGES`, `COMMENT`), check run status synchronization, and delivery deduplication.
 - Exports: OASIS SARIF v2.1.0 (`SarifReportGenerator`) and GitHub PR review payloads with
   inline comments and ```suggestion``` blocks (`PrReviewCommentBuilder`).
 
@@ -79,7 +88,11 @@ built on Shree AI OS `io.github.darshanrathod04:shree-ai-os:1.0.6-developer-prev
 
 ### Known Limitations (documented, by design)
 
-- Audit-trail `ExecutionTimings` use fixed defaults rather than measured durations.
+- Audit-trail `ExecutionTimings` records real measured phase durations (`parseMs`, `analysisMs`, `patchMs`, `totalMs`) from pipeline execution.
+- Automated AST patch synthesis and regression verification are strictly bounded to Java 21 LTS sources. Non-Java languages (Kotlin, Python, JS/TS) explicitly assign `MANUAL_REMEDIATION_REQUIRED` with empty diffs and `isVerified = false`.
+- Python security inspection uses function-scoped lexical heuristics (`getEnclosingScopeCodeLines`) rather than a full polyglot semantic AST engine; sanitizers are detected within enclosing function blocks without path sensitivity.
+- Taint tracking operates within first-order inter-procedural call graphs; database repository lookups (`isRepositoryOrEntityLookup`) halt taint propagation to eliminate lookup key overtaint.
+- Integration tests for `PolicyEngine` and `PrReviewCommentBuilder` handling `MANUAL_REMEDIATION_REQUIRED` patches are tracked as follow-up quality items.
 - Screenshot assets are not yet captured (placeholders listed in `README.md`).
 - When `GEMINI_API_KEY` is absent, chat and reasoning use the deterministic in-memory provider.
 
