@@ -37,11 +37,13 @@ public class MultiLanguageAstSupportTest {
         assertEquals(SourceLanguage.KOTLIN, SourceLanguage.fromPath(Path.of("build.gradle.kts")));
         assertEquals(SourceLanguage.PYTHON, SourceLanguage.fromPath(Path.of("app.py")));
         assertEquals(SourceLanguage.PYTHON, SourceLanguage.fromPath(Path.of("worker.pyw")));
+        assertEquals(SourceLanguage.PYTHON, SourceLanguage.fromPath(Path.of("types.pyi")));
         assertEquals(SourceLanguage.JAVASCRIPT, SourceLanguage.fromPath(Path.of("server.js")));
         assertEquals(SourceLanguage.JAVASCRIPT, SourceLanguage.fromPath(Path.of("index.mjs")));
         assertEquals(SourceLanguage.TYPESCRIPT, SourceLanguage.fromPath(Path.of("client.ts")));
         assertEquals(SourceLanguage.TYPESCRIPT, SourceLanguage.fromPath(Path.of("App.tsx")));
         assertTrue(SourceLanguage.isSupported(Path.of("test.py")));
+        assertTrue(SourceLanguage.isSupported(Path.of("types.pyi")));
         assertTrue(SourceLanguage.isSupported(Path.of("test.kt")));
         assertTrue(SourceLanguage.isSupported(Path.of("test.ts")));
         assertFalse(SourceLanguage.isSupported(Path.of("README.md")));

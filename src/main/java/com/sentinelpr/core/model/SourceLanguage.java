@@ -15,7 +15,7 @@ public enum SourceLanguage {
 
     JAVA(".java"),
     KOTLIN(".kt", ".kts"),
-    PYTHON(".py", ".pyw"),
+    PYTHON(".py", ".pyw", ".pyi"),
     JAVASCRIPT(".js", ".mjs", ".cjs", ".jsx"),
     TYPESCRIPT(".ts", ".tsx", ".mts", ".cts");
 
