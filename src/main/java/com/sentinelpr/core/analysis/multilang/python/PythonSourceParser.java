@@ -123,12 +123,13 @@ public class PythonSourceParser {
 
                 ParsedBlock funcBody = parseBlockStatements(blockLines, blockStart + 1);
 
+                String fullFuncText = rawLine + (blockLines.isEmpty() ? "" : "\n" + String.join("\n", blockLines));
                 PythonFunctionDef funcDef = new PythonFunctionDef(
                         lineNum,
                         indent,
                         blockEnd,
                         0,
-                        rawLine,
+                        fullFuncText,
                         funcName,
                         params,
                         funcDecorators,
@@ -367,12 +368,13 @@ public class PythonSourceParser {
 
                 ParsedBlock methodBody = parseBlockStatements(methodLines, startLineNum + methodStart);
 
+                String fullMethodText = rawLine + (methodLines.isEmpty() ? "" : "\n" + String.join("\n", methodLines));
                 PythonFunctionDef method = new PythonFunctionDef(
                         currentLine,
                         indent,
                         startLineNum + methodEnd,
                         0,
-                        rawLine,
+                        fullMethodText,
                         methodName,
                         params,
                         methodDecorators,
@@ -439,6 +441,30 @@ public class PythonSourceParser {
                 PythonIfStmt ifStmt = parseIfStatement(lineArray, i, indent, startLineNum);
                 result.statements.add(ifStmt);
                 i = ifStmt.getEndLine() - startLineNum + 1;
+                continue;
+            }
+
+            // With statements: with open(...) as f:
+            if (trimmed.startsWith("with ") || trimmed.startsWith("async with ")) {
+                int colonIdx = trimmed.lastIndexOf(':');
+                String withHeader = colonIdx > 0 ? trimmed.substring(0, colonIdx) : trimmed;
+                if (withHeader.startsWith("async with ")) {
+                    withHeader = withHeader.substring(11).trim();
+                } else {
+                    withHeader = withHeader.substring(5).trim();
+                }
+                for (String item : splitTopLevel(withHeader, ',')) {
+                    String itemTrim = item.trim();
+                    int asIdx = itemTrim.lastIndexOf(" as ");
+                    if (asIdx > 0) {
+                        itemTrim = itemTrim.substring(0, asIdx).trim();
+                    }
+                    PythonAstNode withExpr = parseExpression(itemTrim, currentLine, indent);
+                    if (withExpr != null) {
+                        result.statements.add(withExpr);
+                    }
+                }
+                i++;
                 continue;
             }
 
@@ -584,9 +610,18 @@ public class PythonSourceParser {
         if (trimmed.endsWith(")") && trimmed.contains("(")) {
             int parenIdx = findMatchingParenStart(trimmed);
             if (parenIdx > 0) {
-                String calleePart = trimmed.substring(0, parenIdx).trim();
-                String argsPart = trimmed.substring(parenIdx + 1, trimmed.length() - 1).trim();
                 return parseCallExpression(trimmed, lineNum, col);
+            }
+        }
+
+        // 4b. Attribute access: target.attr (e.g. requests.get(url).text)
+        int attrDotIdx = findTopLevelDot(trimmed);
+        if (attrDotIdx > 0) {
+            String leftPart = trimmed.substring(0, attrDotIdx).trim();
+            String attrName = trimmed.substring(attrDotIdx + 1).trim();
+            if (attrName.matches("^[a-zA-Z_][a-zA-Z0-9_]*$")) {
+                PythonAstNode target = parseExpression(leftPart, lineNum, col);
+                return new PythonAttributeExpr(lineNum, col, lineNum, col + trimmed.length(), trimmed, target, attrName);
             }
         }
 
@@ -614,14 +649,13 @@ public class PythonSourceParser {
 
         String fullCallee = trimmed.substring(0, openParen).trim();
         String shortCallee = fullCallee;
-        int dotIdx = fullCallee.lastIndexOf('.');
+        int dotIdx = findTopLevelDot(fullCallee);
+        PythonAstNode target = null;
         if (dotIdx >= 0) {
-            shortCallee = fullCallee.substring(dotIdx + 1);
+            shortCallee = fullCallee.substring(dotIdx + 1).trim();
+            String targetStr = fullCallee.substring(0, dotIdx).trim();
+            target = parseExpression(targetStr, lineNum, col);
         }
-
-        PythonAstNode target = dotIdx >= 0
-                ? new PythonNameExpr(lineNum, col, lineNum, col + dotIdx, fullCallee.substring(0, dotIdx), fullCallee.substring(0, dotIdx))
-                : null;
 
         String argsContent = trimmed.substring(openParen + 1, trimmed.length() - 1).trim();
         List<PythonArgument> arguments = new ArrayList<>();
@@ -656,6 +690,38 @@ public class PythonSourceParser {
                 target,
                 arguments
         );
+    }
+
+    private int findTopLevelDot(String text) {
+        int depthParen = 0;
+        int depthBracket = 0;
+        int depthBrace = 0;
+        boolean inSingleQuote = false;
+        boolean inDoubleQuote = false;
+
+        for (int i = text.length() - 1; i >= 0; i--) {
+            char c = text.charAt(i);
+
+            if (c == '\'' && !inDoubleQuote && (i == 0 || text.charAt(i - 1) != '\\')) {
+                inSingleQuote = !inSingleQuote;
+            } else if (c == '"' && !inSingleQuote && (i == 0 || text.charAt(i - 1) != '\\')) {
+                inDoubleQuote = !inDoubleQuote;
+            }
+
+            if (inSingleQuote || inDoubleQuote) continue;
+
+            if (c == ')') depthParen++;
+            else if (c == '(') depthParen--;
+            else if (c == ']') depthBracket++;
+            else if (c == '[') depthBracket--;
+            else if (c == '}') depthBrace++;
+            else if (c == '{') depthBrace--;
+
+            if (depthParen == 0 && depthBracket == 0 && depthBrace == 0 && c == '.') {
+                return i;
+            }
+        }
+        return -1;
     }
 
     private int findTopLevelBinaryOp(String text, String op) {
