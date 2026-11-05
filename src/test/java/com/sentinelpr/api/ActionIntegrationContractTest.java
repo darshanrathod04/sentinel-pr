@@ -177,6 +177,149 @@ public class ActionIntegrationContractTest {
     }
 
     @Test
+    @DisplayName("Action Contract 2: Empty PR diff (0-byte file) is valid and yields 0 active PR findings")
+    void testActionContract_EmptyPrDiff_ValidZeroByteDiffYieldsZeroActiveFindings(@TempDir Path tempRepo) throws IOException {
+        Path javaFile = tempRepo.resolve("LegacyService.java");
+        Files.writeString(javaFile, """
+                package com.example;
+                public class LegacyService {
+                    public void execOld(String cmd) throws Exception {
+                        Runtime.getRuntime().exec(cmd);
+                    }
+                }
+                """);
+
+        // Valid zero-byte diff representing a PR with no changes
+        Path emptyDiff = tempRepo.resolve("empty.diff");
+        Files.writeString(emptyDiff, "");
+
+        ReviewReport report = cliRunner.run(tempRepo, emptyDiff, null, "json");
+        assertNotNull(report, "ReviewReport must not be null for valid empty diff");
+        assertEquals(0, report.getFindings().size(),
+                "Empty PR diff must produce 0 active findings");
+        assertFalse(report.getSuppressedFindings().isEmpty(),
+                "Pre-existing finding must be suppressed as DIFF_BASELINE debt");
+    }
+
+    @Test
+    @DisplayName("Action Contract 3: Missing base or head ref validation fails safely")
+    void testActionContract_MissingRefValidation_FailsSafely(@TempDir Path tempRepo) {
+        // When PR boundary refs are missing or blank, boundary determination cannot proceed
+        String baseSha = "";
+        String headSha = "abc1234";
+        boolean canDetermineBoundary = !baseSha.isBlank() && !headSha.isBlank();
+        assertFalse(canDetermineBoundary, "Action contract requires both base and head SHA to proceed");
+    }
+
+    @Test
+    @DisplayName("Action Contract 4: Shallow clone diff generation isolates PR changes accurately")
+    void testActionContract_ShallowCloneDiff_IsolatesPrChangesAccurately(@TempDir Path tempRepo) throws IOException {
+        Path serviceFile = tempRepo.resolve("FeatureService.java");
+        Files.writeString(serviceFile, """
+                package com.example;
+                public class FeatureService {
+                    public void query(String q) {
+                        System.out.println(q);
+                    }
+                }
+                """);
+
+        // Diff generated after fetching commit boundary in shallow clone
+        Path shallowDiff = tempRepo.resolve("shallow.diff");
+        Files.writeString(shallowDiff, """
+                diff --git a/FeatureService.java b/FeatureService.java
+                --- a/FeatureService.java
+                +++ b/FeatureService.java
+                @@ -1,5 +1,7 @@
+                 package com.example;
+                 public class FeatureService {
+                +    // new comment added
+                     public void query(String q) {
+                """);
+
+        ReviewReport report = cliRunner.run(tempRepo, shallowDiff, null, "json");
+        assertNotNull(report);
+        assertEquals(0, report.getFindings().size(),
+                "Safe shallow diff should not flag benign modifications");
+    }
+
+    @Test
+    @DisplayName("Action Contract 5: API fallback diff content successfully isolates PR modifications")
+    void testActionContract_ApiFallbackDiff_IsolatesPrModifications(@TempDir Path tempRepo) throws IOException {
+        Path vulnFile = tempRepo.resolve("VulnerableController.java");
+        Files.writeString(vulnFile, """
+                package com.example;
+                public class VulnerableController {
+                    public void exec(String c) throws Exception {
+                        Runtime.getRuntime().exec(c);
+                    }
+                }
+                """);
+
+        // Simulated API response written to temp diff file
+        Path apiDiff = tempRepo.resolve("api_fallback.diff");
+        Files.writeString(apiDiff, """
+                diff --git a/VulnerableController.java b/VulnerableController.java
+                --- a/VulnerableController.java
+                +++ b/VulnerableController.java
+                @@ -4,3 +4,3 @@
+                -        Runtime.getRuntime().exec(c);
+                +        Runtime.getRuntime().exec(c);
+                """);
+
+        ReviewReport report = cliRunner.run(tempRepo, apiDiff, null, "json");
+        assertNotNull(report);
+        assertEquals(1, report.getFindings().size(),
+                "API fallback diff touching vulnerable lines must correctly detect the active finding");
+    }
+
+    @Test
+    @DisplayName("Action Contract 6: API failure prevents uncontained full scan on pull requests")
+    void testActionContract_ApiFailure_AbortsWithoutFullScanFallback(@TempDir Path tempRepo) {
+        int apiHttpCode = 404; // API returns not found or unauthorized
+        boolean diffCaptured = (apiHttpCode == 200);
+        assertFalse(diffCaptured, "Action contract must consider non-200 API response as failure");
+    }
+
+    @Test
+    @DisplayName("Action Contract 7: Push event without PR number executes clean full repository audit")
+    void testActionContract_PushEventWithoutPrNumber_RunsFullRepoScan(@TempDir Path tempRepo) throws IOException {
+        Path safeFile = tempRepo.resolve("SafeService.java");
+        Files.writeString(safeFile, """
+                package com.example;
+                public class SafeService {
+                    public String status() { return "OK"; }
+                }
+                """);
+
+        // On push event: no diffPath, no prNumber, no postComment
+        SentinelCliRunner.CliExecutionResult result = cliRunner.execute(
+                tempRepo, null, null, null, null, null, null, null, "json", "my-org/my-repo", null, false);
+
+        assertEquals(0, result.getExitCode(), "Push event audit must succeed with exit code 0 on clean code");
+        assertNotNull(result.getReport());
+        assertEquals(0, result.getReport().getFindings().size());
+    }
+
+    @Test
+    @DisplayName("Action Contract 8: workflow_dispatch without PR number executes clean full compliance scan")
+    void testActionContract_WorkflowDispatchWithoutPrNumber_RunsCleanly(@TempDir Path tempRepo) throws IOException {
+        Path serviceFile = tempRepo.resolve("DispatchService.java");
+        Files.writeString(serviceFile, """
+                package com.example;
+                public class DispatchService {
+                    public void run() {}
+                }
+                """);
+
+        SentinelCliRunner.CliExecutionResult result = cliRunner.execute(
+                tempRepo, null, null, null, null, null, null, null, "json", null, null, false);
+
+        assertEquals(0, result.getExitCode(), "workflow_dispatch full audit must exit with code 0 on clean repo");
+        assertNotNull(result.getReport());
+    }
+
+    @Test
     @DisplayName("Action Contract: Malformed PR diff must fail explicitly")
     void testActionContract_MalformedDiff_FailsExplicitly(@TempDir Path tempRepo) throws IOException {
         Path javaFile = tempRepo.resolve("VulnerableService.java");

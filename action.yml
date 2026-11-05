@@ -39,8 +39,9 @@ runs:
 
     - name: Download SentinelPR
       shell: bash
+      env:
+        VERSION: "${{ inputs.version }}"
       run: |
-        VERSION="${{ inputs.version }}"
         if ! curl -s -f -L "https://github.com/darshanrathod04/sentinel-pr/releases/download/v${VERSION}/sentinel-pr-${VERSION}.jar" -o sentinel-pr.jar; then
           echo "Release v${VERSION} not found; falling back to v1.1.4"
           curl -s -f -L "https://github.com/darshanrathod04/sentinel-pr/releases/download/v1.1.4/sentinel-pr-1.1.4.jar" -o sentinel-pr.jar
@@ -57,52 +58,87 @@ runs:
         REPO: "${{ github.repository }}"
       run: |
         DIFF_ARG=""
-        if [ -n "$PR_NUMBER" ]; then
+        PR_ARGS=""
+
+        # Detect pull request context
+        if [ -n "$PR_NUMBER" ] && [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
+          PR_ARGS="--pr $PR_NUMBER --post-comment"
+
           if [ -z "$BASE_SHA" ] || [ -z "$HEAD_SHA" ]; then
             echo "::error::Pull request event missing base or head SHA. Cannot determine PR boundary safely."
             exit 1
           fi
 
+          DIFF_FILE="/tmp/sentinel-pr.diff"
+          rm -f "$DIFF_FILE"
+
           echo "Generating PR diff between base $BASE_SHA and head $HEAD_SHA..."
-          # Attempt git fetch for base and head refs if missing locally
+          # Fetch refs with limited depth if missing locally (handles shallow clones)
           git fetch --no-tags --depth=100 origin "$BASE_SHA" 2>/dev/null || true
           git fetch --no-tags --depth=100 origin "$HEAD_SHA" 2>/dev/null || true
 
-          if git diff "$BASE_SHA"..."$HEAD_SHA" > /tmp/sentinel-pr.diff 2>/dev/null && [ -s /tmp/sentinel-pr.diff ]; then
-            echo "Captured git diff via three-dot merge-base range."
-            DIFF_ARG="--diff /tmp/sentinel-pr.diff"
-          elif git diff "$BASE_SHA" "$HEAD_SHA" > /tmp/sentinel-pr.diff 2>/dev/null && [ -s /tmp/sentinel-pr.diff ]; then
-            echo "Captured git diff via two-dot range."
-            DIFF_ARG="--diff /tmp/sentinel-pr.diff"
-          else
-            echo "Local git range unavailable; attempting GitHub API diff download..."
-            curl -s -f -L -H "Authorization: token $GITHUB_TOKEN" \
+          # Attempt local git diff generation (three-dot merge-base first, then two-dot)
+          DIFF_CAPTURED=false
+          if git diff "$BASE_SHA"..."$HEAD_SHA" > "$DIFF_FILE" 2>/dev/null; then
+            echo "Successfully generated three-dot merge-base diff (bytes: $(wc -c < "$DIFF_FILE" | tr -d ' '))."
+            DIFF_CAPTURED=true
+          elif git diff "$BASE_SHA" "$HEAD_SHA" > "$DIFF_FILE" 2>/dev/null; then
+            echo "Successfully generated two-dot diff (bytes: $(wc -c < "$DIFF_FILE" | tr -d ' '))."
+            DIFF_CAPTURED=true
+          fi
+
+          if [ "$DIFF_CAPTURED" = false ]; then
+            echo "Local git diff generation failed (unresolved commit refs); attempting GitHub REST API fallback..."
+            HTTP_CODE=$(curl -s -w "%{http_code}" -L \
+              -H "Authorization: token $GITHUB_TOKEN" \
               -H "Accept: application/vnd.github.v3.diff" \
               "https://api.github.com/repos/$REPO/pulls/$PR_NUMBER" \
-              -o /tmp/sentinel-pr.diff 2>/dev/null || true
+              -o "$DIFF_FILE" 2>/dev/null || echo "000")
 
-            if [ -s /tmp/sentinel-pr.diff ]; then
-              echo "Successfully captured PR diff from GitHub API."
-              DIFF_ARG="--diff /tmp/sentinel-pr.diff"
+            if [ "$HTTP_CODE" = "200" ] && [ -f "$DIFF_FILE" ]; then
+              echo "Successfully acquired PR diff via GitHub API (bytes: $(wc -c < "$DIFF_FILE" | tr -d ' '))."
+              DIFF_CAPTURED=true
             else
-              echo "::error::Could not acquire PR diff for PR #$PR_NUMBER. Refusing to fall back to uncontained full scan on pull request."
+              echo "::error::Could not acquire PR diff for PR #$PR_NUMBER from Git or GitHub API (HTTP $HTTP_CODE). Refusing to fall back to uncontained full scan on pull request."
               exit 1
             fi
           fi
+
+          DIFF_ARG="--diff $DIFF_FILE"
         fi
-        echo "diff_arg=$DIFF_ARG" >> $GITHUB_OUTPUT
+
+        echo "diff_arg=$DIFF_ARG" >> "$GITHUB_OUTPUT"
+        echo "pr_args=$PR_ARGS" >> "$GITHUB_OUTPUT"
 
     - name: Run SentinelPR
       shell: bash
       env:
-        GITHUB_TOKEN: ${{ inputs.github_token }}
-        GEMINI_API_KEY: ${{ inputs.gemini_api_key }}
+        GITHUB_TOKEN: "${{ inputs.github_token }}"
+        GEMINI_API_KEY: "${{ inputs.gemini_api_key }}"
+        REPO: "${{ github.repository }}"
+        FORMAT: "${{ inputs.format }}"
+        DIFF_ARG: "${{ steps.diff-prep.outputs.diff_arg }}"
+        PR_ARGS: "${{ steps.diff-prep.outputs.pr_args }}"
       run: |
-        java -Dloader.main=com.sentinelpr.cli.SentinelCliRunner \
-          -cp sentinel-pr.jar org.springframework.boot.loader.launch.PropertiesLauncher \
-          --target . \
-          --repo ${{ github.repository }} \
-          --pr ${{ github.event.pull_request.number }} \
-          ${{ steps.diff-prep.outputs.diff_arg }} \
-          --post-comment \
-          -f ${{ inputs.format }}
+        CMD=(java -Dloader.main=com.sentinelpr.cli.SentinelCliRunner -cp sentinel-pr.jar org.springframework.boot.loader.launch.PropertiesLauncher --target .)
+
+        if [ -n "$REPO" ]; then
+          CMD+=(--repo "$REPO")
+        fi
+
+        if [ -n "$PR_ARGS" ]; then
+          # Split PR_ARGS into array elements safely without eval
+          read -r -a PR_ARR <<< "$PR_ARGS"
+          CMD+=("${PR_ARR[@]}")
+        fi
+
+        if [ -n "$DIFF_ARG" ]; then
+          read -r -a DIFF_ARR <<< "$DIFF_ARG"
+          CMD+=("${DIFF_ARR[@]}")
+        fi
+
+        if [ -n "$FORMAT" ]; then
+          CMD+=(-f "$FORMAT")
+        fi
+
+        "${CMD[@]}"
