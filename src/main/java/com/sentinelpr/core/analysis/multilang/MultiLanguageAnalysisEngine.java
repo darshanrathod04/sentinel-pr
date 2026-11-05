@@ -522,9 +522,9 @@ public class MultiLanguageAnalysisEngine {
             }
 
             // SSRF: fetch(...), axios.get(...), http.get(...) with dynamic URL
-            if ((line.contains("fetch(") || line.contains("axios.get(") || line.contains("http.get(") || line.contains("https.get("))
-                    && !line.contains("http://") && !line.contains("https://")
-                    && !source.getRawSource().contains("allowlist") && !source.getRawSource().contains("whitelist")) {
+            // Token-aware matching: refetch(), query.refetch(), prefetch() are ignored
+            // Client-side React/Next.js UI code is distinguished and not classified as server-side SSRF
+            if (!isClientSideBrowserCode(source) && isServerSideHttpCall(line) && !isHardcodedUrl(line) && !hasAllowlistValidation(lines, i, source)) {
                 findings.add(createFinding(
                         SecurityRule.SSRF,
                         Severity.CRITICAL,
@@ -761,6 +761,83 @@ public class MultiLanguageAnalysisEngine {
             }
         }
         return "moduleScope";
+    }
+
+    private static final Pattern NODE_HTTP_CLIENT_PATTERN = Pattern.compile(
+            "(?<![a-zA-Z0-9_.])(?:axios\\.(?:get|post|put|delete|request)|(?:http|https)\\.(?:get|request)|fetch)\\s*\\(\\s*([^\\s),]+)"
+    );
+
+    private boolean isServerSideHttpCall(String line) {
+        if (line == null || line.isBlank()) return false;
+        // Negative filter: refetch, prefetch, query.refetch
+        if (line.contains("refetch") || line.contains("prefetch")) {
+            return false;
+        }
+        Matcher m = NODE_HTTP_CLIENT_PATTERN.matcher(line);
+        if (m.find()) {
+            String arg = m.group(1).trim();
+            if (arg.isEmpty() || arg.equals(")")) {
+                return false;
+            }
+            return true;
+        }
+        return false;
+    }
+
+    private boolean isHardcodedUrl(String line) {
+        if (line == null) return false;
+        // Static URLs with http/https or static relative paths without interpolation
+        return (line.matches(".*\\(\\s*['\"][^'\"]*['\"].*") && !line.contains("${"))
+                || line.contains("http://")
+                || line.contains("https://");
+    }
+
+    private boolean hasAllowlistValidation(String[] lines, int index, InspectedSource source) {
+        if (source.getRawSource() != null && (source.getRawSource().contains("allowlist") || source.getRawSource().contains("whitelist"))) {
+            return true;
+        }
+        List<String> scope = getEnclosingScopeCodeLines(lines, index, "function");
+        if (scope.isEmpty()) {
+            return java.util.Arrays.stream(lines).anyMatch(l ->
+                    (l.contains("allowlist") || l.contains("whitelist") || l.contains("ALLOWED_HOSTS") || l.contains("isSafeUrl") || l.contains("isValidUrl"))
+                    && (l.contains("includes(") || l.contains("indexOf(") || l.contains("if ") || l.contains("==")));
+        }
+        return scope.stream().anyMatch(l ->
+                (l.contains("allowlist") || l.contains("whitelist") || l.contains("ALLOWED_HOSTS") || l.contains("isSafeUrl") || l.contains("isValidUrl"))
+                && (l.contains("includes(") || l.contains("indexOf(") || l.contains("if ") || l.contains("==")));
+    }
+
+    private boolean isClientSideBrowserCode(InspectedSource source) {
+        if (source == null) return false;
+        String pathStr = source.getFilePath() != null ? source.getFilePath().toString().replace('\\', '/') : "";
+        // 1. React / Next.js component file extensions
+        if (pathStr.endsWith(".tsx") || pathStr.endsWith(".jsx")) {
+            return true;
+        }
+        // 2. Typical frontend directory structures
+        if (pathStr.contains("/frontend/") || pathStr.contains("/components/") || pathStr.contains("/pages/") || pathStr.contains("/app/")) {
+            String raw = source.getRawSource();
+            if (raw != null && (raw.contains("\"use client\"") || raw.contains("'use client'")
+                    || raw.contains("from 'react'") || raw.contains("from \"react\"")
+                    || raw.contains("from '@tanstack/") || raw.contains("from \"@tanstack/")
+                    || raw.contains("useState") || raw.contains("useEffect")
+                    || raw.contains("useCallback") || raw.contains("useQuery")
+                    || raw.contains("document.") || raw.contains("window."))) {
+                return true;
+            }
+        }
+        // 3. Raw source content directives
+        String raw = source.getRawSource();
+        if (raw != null) {
+            if (raw.contains("\"use client\"") || raw.contains("'use client'")) {
+                return true;
+            }
+            if ((raw.contains("from 'react'") || raw.contains("from \"react\""))
+                    && (raw.contains("useState") || raw.contains("useCallback") || raw.contains("onClick"))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private String maskSecret(String line) {

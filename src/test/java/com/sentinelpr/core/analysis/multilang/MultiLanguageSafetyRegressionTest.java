@@ -4,6 +4,7 @@ import com.sentinelpr.client.DeveloperFacade;
 import com.sentinelpr.core.model.InspectedSource;
 import com.sentinelpr.core.model.SecurityFinding;
 import com.sentinelpr.core.model.SecurityRule;
+import com.sentinelpr.core.model.Severity;
 import com.sentinelpr.core.model.SourceLanguage;
 import com.sentinelpr.core.model.UnifiedDiffPatch;
 import com.sentinelpr.core.remediation.PatchValidationStatus;
@@ -244,5 +245,71 @@ public class MultiLanguageSafetyRegressionTest {
 
         assertEquals(1, randFindings.size(), "Only generate_auth_token must be flagged, not roll_dice");
         assertEquals("generate_auth_token", randFindings.get(0).getMethodName());
+    }
+
+    @Test
+    @DisplayName("Milestone 3 Negative: React Query refetch() and UI button callbacks do not trigger false positive SSRF")
+    void testNodeJsSsrf_ClientSideRefetchDoesNotMatch() {
+        String tsxCode = """
+                "use client";
+                import React, { useCallback } from 'react';
+
+                export function AlertsDrawer({ refetch }) {
+                    return (
+                        <div>
+                            <button onClick={() => refetch()}>Refresh Data</button>
+                            <button onClick={() => query.refetch()}>Query Refetch</button>
+                        </div>
+                    );
+                }
+                """;
+        InspectedSource source = inspectionService.inspectSourceCode(tsxCode, "frontend/src/components/alerts/AlertsDrawer.tsx");
+        List<SecurityFinding> findings = evaluationService.evaluate(source);
+
+        assertTrue(findings.stream().noneMatch(f -> f.getRule() == SecurityRule.SSRF),
+                "Client-side React refetch() callbacks must never produce SSRF findings");
+    }
+
+    @Test
+    @DisplayName("Milestone 3 Negative: Hardcoded static URLs in fetch/axios do not trigger SSRF")
+    void testNodeJsSsrf_HardcodedUrlDoesNotTrigger() {
+        String jsCode = """
+                export async function pollData() {
+                    const response = await apiClient.post("/connectors/poll");
+                    const status = await fetch("https://status.example.com/health");
+                    return response.data;
+                }
+                """;
+        InspectedSource source = inspectionService.inspectSourceCode(jsCode, "apiService.js");
+        List<SecurityFinding> findings = evaluationService.evaluate(source);
+
+        assertTrue(findings.stream().noneMatch(f -> f.getRule() == SecurityRule.SSRF),
+                "Hardcoded URLs like '/connectors/poll' or 'https://...' must not produce SSRF findings");
+    }
+
+    @Test
+    @DisplayName("Milestone 3 Positive: Server-side Node.js fetch with dynamic destination is detected as SSRF")
+    void testNodeJsSsrf_ServerSideDynamicDestination_Detected() {
+        String serverCode = """
+                const express = require('express');
+                const app = express();
+
+                app.get('/proxy', async (req, res) => {
+                    const target = req.query.url;
+                    const response = await fetch(target);
+                    const body = await response.text();
+                    res.send(body);
+                });
+                """;
+        InspectedSource source = inspectionService.inspectSourceCode(serverCode, "server/proxyRouter.js");
+        List<SecurityFinding> findings = evaluationService.evaluate(source);
+
+        List<SecurityFinding> ssrf = findings.stream()
+                .filter(f -> f.getRule() == SecurityRule.SSRF)
+                .toList();
+
+        assertEquals(1, ssrf.size(), "Dynamic fetch(target) in server code must trigger SEC-012-SSRF");
+        assertEquals(SecurityRule.SSRF, ssrf.get(0).getRule());
+        assertEquals(Severity.CRITICAL, ssrf.get(0).getSeverity());
     }
 }
