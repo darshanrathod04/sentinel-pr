@@ -94,19 +94,10 @@ public class RuleEvaluationService {
             case HARDCODED_SECRET -> client.reasoning().evaluateHardcodedSecrets(inspectedSource);
             case SPRING_SECURITY_CSRF_DISABLED -> client.reasoning().evaluateSpringCsrfDisabled(inspectedSource);
             case SPRING_PERMISSIVE_CORS -> client.reasoning().evaluateSpringPermissiveCors(inspectedSource);
-            case XXE_INJECTION -> client.reasoning().evaluateXxeInjection(inspectedSource);
-            case SSRF -> client.reasoning().evaluateSsrf(inspectedSource);
-            case JWT_NONE_ALGORITHM -> client.reasoning().evaluateJwtNoneAlgorithm(inspectedSource);
-            case LOG_INJECTION -> client.reasoning().evaluateLogInjection(inspectedSource);
-            case LDAP_INJECTION -> client.reasoning().evaluateLdapInjection(inspectedSource);
-            case XPATH_INJECTION -> client.reasoning().evaluateXpathInjection(inspectedSource);
-            case OPEN_REDIRECT -> client.reasoning().evaluateOpenRedirect(inspectedSource);
-            case WEAK_CRYPTO -> client.reasoning().evaluateWeakCrypto(inspectedSource);
-            case INSECURE_RANDOM -> client.reasoning().evaluateInsecureRandom(inspectedSource);
-            case XSS -> client.reasoning().evaluateXss(inspectedSource);
             case ARCH_CYCLIC_DEPENDENCY -> architectureEngine.evaluateCyclicDependencies(inspectedSource, List.of(inspectedSource));
             case ARCH_LEAKY_ABSTRACTION -> architectureEngine.evaluateLeakyAbstractions(inspectedSource);
             case ARCH_NON_DETERMINISTIC_CALL -> architectureEngine.evaluateNonDeterministicCalls(inspectedSource);
+            default -> Collections.emptyList();
         };
     }
 

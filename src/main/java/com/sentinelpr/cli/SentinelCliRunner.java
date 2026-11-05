@@ -18,9 +18,6 @@ import com.sentinelpr.core.governance.baseline.BaselineManager;
 import com.sentinelpr.core.governance.policy.PolicyEngine;
 import com.sentinelpr.core.governance.policy.PolicyEvaluationResult;
 import com.sentinelpr.core.governance.policy.SentinelPolicy;
-import com.sentinelpr.core.multirepo.MultiRepoAuditReport;
-import com.sentinelpr.core.multirepo.MultiRepoManifest;
-import com.sentinelpr.core.multirepo.MultiRepoScannerEngine;
 import java.util.List;
 import java.util.Map;
 import com.sentinelpr.core.service.AutomatedPatchService;
@@ -30,9 +27,6 @@ import com.sentinelpr.core.service.PatchVerifier;
 import com.sentinelpr.core.service.ReviewSessionMemory;
 import com.sentinelpr.core.service.RuleEvaluationService;
 import com.sentinelpr.core.service.SentinelAuditOrchestrator;
-import com.sentinelpr.core.watch.IncrementalScanResult;
-import com.sentinelpr.core.watch.WatchEventListener;
-import com.sentinelpr.core.watch.WorkspaceWatchDaemon;
 import com.sentinelpr.github.ReviewCommentService;
 import java.util.Set;
 import com.sentinelpr.github.model.GitHubComment;
@@ -57,7 +51,6 @@ public class SentinelCliRunner {
     private final PrReviewCommentBuilder reviewCommentBuilder;
     private final BaselineManager baselineManager;
     private final PolicyEngine policyEngine;
-    private final MultiRepoScannerEngine multiRepoScannerEngine;
     private final AuditTrailLogger auditTrailLogger;
     private final com.sentinelpr.client.MemoryFacade memoryFacade;
     private final ReviewCommentService reviewCommentService;
@@ -120,7 +113,6 @@ public class SentinelCliRunner {
         this.auditTrailLogger = Objects.requireNonNull(auditTrailLogger, "auditTrailLogger must not be null");
         this.memoryFacade = Objects.requireNonNull(memoryFacade, "memoryFacade must not be null");
         this.reviewCommentService = Objects.requireNonNull(reviewCommentService, "reviewCommentService must not be null");
-        this.multiRepoScannerEngine = new MultiRepoScannerEngine(this.orchestrator, this.policyEngine, this.baselineManager);
         this.objectMapper = new ObjectMapper()
                 .registerModule(new JavaTimeModule())
                 .enable(SerializationFeature.INDENT_OUTPUT);
@@ -561,8 +553,6 @@ public class SentinelCliRunner {
         String repo = null;
         Integer prNumber = null;
         boolean postComment = false;
-        boolean watchMode = false;
-        long debounceMs = WorkspaceWatchDaemon.DEFAULT_DEBOUNCE_MS;
 
         for (int i = 0; i < args.length; i++) {
             String arg = args[i];
@@ -593,52 +583,8 @@ public class SentinelCliRunner {
                 postComment = true;
             } else if (("-f".equalsIgnoreCase(arg) || "--format".equalsIgnoreCase(arg)) && i + 1 < args.length) {
                 format = args[++i];
-            } else if ("--multi-repo".equalsIgnoreCase(arg) && i + 1 < args.length) {
-                multiRepoManifestPath = Path.of(args[++i]);
-            } else if ("--repos".equalsIgnoreCase(arg) && i + 1 < args.length) {
-                multiRepoList = args[++i];
-            } else if ("--workspace-root".equalsIgnoreCase(arg) && i + 1 < args.length) {
-                workspaceRoot = Path.of(args[++i]);
-            } else if ("--concurrency".equalsIgnoreCase(arg) && i + 1 < args.length) {
-                try {
-                    concurrency = Integer.parseInt(args[++i]);
-                } catch (NumberFormatException ignored) {}
-            } else if ("--watch".equalsIgnoreCase(arg) || "-w".equalsIgnoreCase(arg)) {
-                watchMode = true;
-            } else if ("--debounce".equalsIgnoreCase(arg) && i + 1 < args.length) {
-                try {
-                    debounceMs = Long.parseLong(args[++i]);
-                } catch (NumberFormatException ignored) {}
             } else if (!arg.startsWith("-")) {
                 target = Path.of(arg);
-            }
-        }
-
-        if (multiRepoManifestPath != null || multiRepoList != null || workspaceRoot != null) {
-            try {
-                MultiRepoManifest manifest;
-                if (multiRepoManifestPath != null) {
-                    manifest = MultiRepoManifest.fromFile(multiRepoManifestPath);
-                } else if (workspaceRoot != null) {
-                    manifest = MultiRepoManifest.fromDirectory(workspaceRoot);
-                } else {
-                    List<Path> paths = Arrays.stream(multiRepoList.split(","))
-                            .map(String::trim)
-                            .filter(s -> !s.isEmpty())
-                            .map(Path::of)
-                            .toList();
-                    manifest = MultiRepoManifest.fromPaths(paths);
-                }
-                if (policyPath != null) {
-                    manifest.setDefaultPolicyPath(policyPath);
-                }
-                if (concurrency != null && concurrency > 0) {
-                    manifest.setConcurrency(concurrency);
-                }
-                return executeMultiRepo(manifest, format, sarifPath);
-            } catch (Exception e) {
-                System.err.println("[SentinelPR:CLI] Failed to load multi-repository manifest: " + e.getMessage());
-                return 3;
             }
         }
 
@@ -647,45 +593,8 @@ public class SentinelCliRunner {
             return 3;
         }
 
-        if (watchMode) {
-            return executeWatch(target, policyPath, baselinePath, debounceMs, format);
-        }
-
         CliExecutionResult result = execute(target, diffPath, baselinePath, createBaselinePath, policyPath, sarifPath, auditLogPath, patchOutPath, format, repo, prNumber, postComment);
         return result.getExitCode();
-    }
-
-    public int executeMultiRepo(MultiRepoManifest manifest, String format, Path sarifPath) {
-        try {
-            MultiRepoAuditReport report = multiRepoScannerEngine.scan(manifest);
-            System.out.println(report.toSummaryMarkdown());
-
-            if (sarifPath != null) {
-                Map<String, Object> sarifModel = report.toMultiRunSarif(sarifGenerator);
-                Files.writeString(sarifPath, objectMapper.writeValueAsString(sarifModel));
-                System.out.println("[SentinelPR:SARIF] Multi-run SARIF export written to: " + sarifPath.toAbsolutePath());
-            }
-
-            if ("json".equalsIgnoreCase(format)) {
-                System.out.println("\n--- [Aggregated JSON Report] ---");
-                System.out.println(report.toJson());
-            }
-
-            if (report.getFailedRepositories() > 0) {
-                return 2;
-            }
-            if (report.getBreachedRepositories() > 0) {
-                return 1;
-            }
-            return 0;
-        } catch (Exception e) {
-            System.err.println("[SentinelPR:MultiRepo] Execution error: " + e.getMessage());
-            return 2;
-        }
-    }
-
-    public MultiRepoScannerEngine getMultiRepoScannerEngine() {
-        return multiRepoScannerEngine;
     }
 
     public static void main(String[] args) {
@@ -745,105 +654,9 @@ public class SentinelCliRunner {
         return null;
     }
 
-    public int executeWatch(Path target, Path policyPath, Path baselinePath, long debounceMs, String format) {
-        System.out.println("===============================================================================");
-        System.out.println("            SENTINELPR CONTINUOUS INCREMENTAL WATCH DAEMON                     ");
-        System.out.println("===============================================================================");
-        System.out.println("[SentinelPR:Watch] Initializing incremental workspace for: " + target.toAbsolutePath());
-        System.out.println("[SentinelPR:Watch] Debounce window: " + debounceMs + "ms");
-        System.out.println("[SentinelPR:Watch] Press Ctrl+C to stop watch daemon.\n");
-
-        SentinelPolicy policy = null;
-        if (policyPath != null && Files.exists(policyPath)) {
-            try {
-                policy = policyEngine.loadPolicy(policyPath);
-                System.out.println("[SentinelPR:Watch] Loaded enterprise policy from: " + policyPath);
-            } catch (Exception e) {
-                System.err.println("[SentinelPR:Watch] Warning: Failed to load policy: " + e.getMessage());
-            }
-        }
-
-        try (WorkspaceWatchDaemon daemon = new WorkspaceWatchDaemon(target, orchestrator, debounceMs, policyEngine, policy)) {
-            daemon.addListener(new WatchEventListener() {
-                @Override
-                public void onWatchStarted(Path rootDirectory) {
-                    System.out.println("[SentinelPR:Watch] Watch daemon started on " + rootDirectory);
-                }
-
-                @Override
-                public void onFileEvent(Path file, String eventKind) {
-                    System.out.printf("[SentinelPR:Watch] Event [%s]: %s\n", eventKind, target.relativize(file));
-                }
-
-                @Override
-                public void onScanStarted(Set<Path> dirtyFiles) {
-                    System.out.println("[SentinelPR:Watch] File change detected (" + dirtyFiles.size() + " dirty file(s)). Running incremental re-scan...");
-                }
-
-                @Override
-                public void onScanCompleted(IncrementalScanResult result) {
-                    ReviewReport rep = result.getReport();
-                    String prefix = result.isIncremental() ? "[INCREMENTAL]" : "[BASELINE]";
-                    System.out.printf("[SentinelPR:Watch] %s Audit finished in %dms (Scan #%d, %d tracked files):\n",
-                            prefix, result.getDurationMs(), result.getSequenceNumber(), result.getTotalFiles());
-                    System.out.printf("  Active Vulnerabilities: %d | Suppressed: %d | Synthesized Patches: %d\n",
-                            rep.getVulnerabilityCount(), rep.getSuppressedCount(), rep.getPatches().size());
-
-                    if (rep.getVulnerabilityCount() > 0) {
-                        System.out.println("  ⚠️ ACTIVE FINDINGS:");
-                        for (SecurityFinding f : rep.getFindings()) {
-                            System.out.printf("    - [%s] %s:%d [%s] - %s (Confidence: %.2f)\n",
-                                    f.getRule().getRuleId(), f.getTargetFile(), f.getStartLine(), f.getSeverity(), f.getDescription(), f.getConfidence());
-                        }
-                    } else {
-                        System.out.println("  ✅ STATUS: CLEAN (0 active findings)");
-                    }
-                    System.out.println();
-                }
-
-                @Override
-                public void onWatchError(Throwable error) {
-                    System.err.println("[SentinelPR:Watch] Error during watch scan: " + error.getMessage());
-                }
-
-                @Override
-                public void onWatchStopped(Path rootDirectory) {
-                    System.out.println("[SentinelPR:Watch] Watch daemon stopped.");
-                }
-            });
-
-            daemon.start();
-
-            // Register shutdown hook for clean Ctrl+C termination
-            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                System.out.println("\n[SentinelPR:Watch] Shutting down watch daemon...");
-                daemon.stop();
-            }));
-
-            // Keep main thread alive while daemon runs
-            while (daemon.isRunning()) {
-                try {
-                    Thread.sleep(1000);
-                } catch (InterruptedException e) {
-                    break;
-                }
-            }
-            return 0;
-        } catch (Exception e) {
-            System.err.println("[SentinelPR:Watch] Fatal watcher error: " + e.getMessage());
-            return 3;
-        }
-    }
-
     private static void printUsage() {
         System.out.println("Usage: java -jar sentinel-pr.jar <target-path> [options]");
         System.out.println("Options:");
-        System.out.println("  -w, --watch                    Continuous watch mode with sub-second incremental re-auditing");
-        System.out.println("  --debounce <ms>                Debounce window for file watcher in milliseconds [default: 300]");
-        System.out.println("  --multi-repo <manifest.json>   Execute fleet audit configured by JSON manifest");
-        System.out.println("  --repos <dir1,dir2,...>        Comma-separated list of repository directories to scan");
-        System.out.println("  --workspace-root <dir>         Auto-discover and audit all repositories under workspace");
-        System.out.println("  --concurrency <N>              Number of concurrent repository scan workers");
         System.out.println("  --diff <patch-file>            Enable incremental git diff scanning");
         System.out.println("  --baseline <baseline-file>     Filter findings against technical debt baseline");
         System.out.println("  --create-baseline <out.json>   Export findings as technical debt baseline snapshot");
