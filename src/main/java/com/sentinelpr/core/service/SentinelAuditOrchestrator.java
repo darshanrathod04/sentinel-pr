@@ -313,8 +313,8 @@ public class SentinelAuditOrchestrator {
      */
     public ReviewReport auditPathWithDiff(Path targetPath, String diffContent) throws IOException {
         Objects.requireNonNull(targetPath, "targetPath must not be null");
-        if (diffContent == null || diffContent.isBlank()) {
-            return auditPath(targetPath);
+        if (diffContent == null) {
+            throw new IllegalArgumentException("diffContent must not be null when invoking auditPathWithDiff");
         }
 
         String reportId = "REV-" + UUID.randomUUID().toString().substring(0, 8);

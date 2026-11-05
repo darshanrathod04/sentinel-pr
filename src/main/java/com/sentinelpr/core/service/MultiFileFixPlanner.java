@@ -75,12 +75,24 @@ public class MultiFileFixPlanner {
         String origProv = providerSource.getRawSource();
         String origCons = consumerSource.getRawSource();
 
-        String patchedProv = origProv.contains(providerTarget)
-                ? origProv.replace(providerTarget, providerReplacement)
+        String effectiveProvTarget = origProv.contains(providerTarget)
+                ? providerTarget
+                : providerTarget.replace("\n", "\r\n");
+        String effectiveProvRepl = origProv.contains("\r\n") && !providerReplacement.contains("\r\n")
+                ? providerReplacement.replace("\n", "\r\n")
+                : providerReplacement;
+        String patchedProv = origProv.contains(effectiveProvTarget)
+                ? origProv.replace(effectiveProvTarget, effectiveProvRepl)
                 : origProv;
 
-        String patchedCons = origCons.contains(consumerTarget)
-                ? origCons.replace(consumerTarget, consumerReplacement)
+        String effectiveConsTarget = origCons.contains(consumerTarget)
+                ? consumerTarget
+                : consumerTarget.replace("\n", "\r\n");
+        String effectiveConsRepl = origCons.contains("\r\n") && !consumerReplacement.contains("\r\n")
+                ? consumerReplacement.replace("\n", "\r\n")
+                : consumerReplacement;
+        String patchedCons = origCons.contains(effectiveConsTarget)
+                ? origCons.replace(effectiveConsTarget, effectiveConsRepl)
                 : origCons;
 
         // Verify AST for both files simultaneously

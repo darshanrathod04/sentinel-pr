@@ -258,7 +258,7 @@ class SentinelPrP2WorkflowVerificationTest {
         // 1. Health check
         ResponseEntity<Map<String, Object>> health = reviewController.health();
         assertEquals(200, health.getStatusCode().value());
-        assertEquals(10, health.getBody().get("rules"), "Controller health endpoint must report 10 active rules");
+        assertEquals(SecurityRule.getCoreSecurityRulesCount(), health.getBody().get("rules"), "Controller health endpoint must report active security rules count");
 
         // 2. Incremental review via POST /review with diffContent
         String patchContent = Files.readString(diffFile);

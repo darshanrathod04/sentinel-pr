@@ -35,6 +35,15 @@ public class IncrementalDiffScanner {
     private static final String DIFF_BASELINE_TYPE = "DIFF_BASELINE";
 
     /**
+     * Exception thrown when unified diff content contains malformed or unparseable hunk headers.
+     */
+    public static class MalformedDiffException extends IllegalArgumentException {
+        public MalformedDiffException(String message) {
+            super(message);
+        }
+    }
+
+    /**
      * Represents a single modified hunk interval in a unified diff.
      */
     public static class DiffHunk {
@@ -319,10 +328,14 @@ public class IncrementalDiffScanner {
                 currentSourcePath = parseFilePath(line.substring(4));
             } else if (line.startsWith("+++ ")) {
                 currentTargetPath = parseFilePath(line.substring(4));
-            } else if (line.startsWith("@@ ")) {
+            } else if (line.startsWith("@@")) {
                 // Flush previous hunk if any
                 if (inHunk) {
                     currentHunks.add(new DiffHunk(currentOldStart, currentOldCount, currentNewStart, currentNewCount, currentAddedLines, currentModifiedLines));
+                    inHunk = false;
+                }
+                if (currentTargetPath == null && currentSourcePath == null) {
+                    throw new MalformedDiffException("Malformed diff: hunk header encountered without target file header: " + line);
                 }
                 Matcher matcher = HUNK_HEADER_PATTERN.matcher(line);
                 if (matcher.find()) {
@@ -334,6 +347,8 @@ public class IncrementalDiffScanner {
                     currentAddedLines = new HashSet<>();
                     currentModifiedLines = new HashSet<>();
                     inHunk = true;
+                } else {
+                    throw new MalformedDiffException("Malformed diff hunk header: " + line);
                 }
             } else if (inHunk) {
                 if (line.startsWith("+")) {

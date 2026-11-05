@@ -375,7 +375,7 @@ class SentinelPrP3GovernanceVerificationTest {
 
         Map<String, Object> body = statusResp.getBody();
         assertEquals("ACTIVE", body.get("status"));
-        assertEquals(10, body.get("rulesCatalog"));
+        assertEquals(SecurityRule.getCoreSecurityRulesCount(), body.get("rulesCatalog"));
         assertEquals(SentinelPolicy.DEFAULT_POLICY_NAME, body.get("defaultPolicy"));
         assertTrue(body.get("baselineEngine").toString().contains("SentinelBaselineSnapshot"));
         assertNotNull(body.get("complianceStandards"));
