@@ -307,7 +307,8 @@ flowchart TD
   - Reliability Benchmark: 108/108 test cases (62 vulnerable, 46 safe).
     - True Positives: 62 (target >= 56)
     - False Positives: 0 (target <= 2)
-    - True Negatives: 46 (target >= 50)
+    - True Negatives: 46 (reconciled target = 46 / 100.0% Specificity; note: historical target '>= 50' was mathematically impossible on ground truth of 46 safe fixtures)
+    - Specificity: 100.00% (46/46 safe cases correctly passed; target 100.0%)
     - False Negatives: 0 (target == 0)
     - Precision: 100.00% (target >= 96.5%)
     - Recall: 100.00% (target == 100.0%)
