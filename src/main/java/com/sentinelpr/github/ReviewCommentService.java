@@ -106,7 +106,9 @@ public class ReviewCommentService {
         }
 
         String closingBlock = "\n```\n\n---\nPowered by SentinelPR + Shree AI OS\n";
-        String emptyBlock = "```diff\n# No patch required\n```\n\n---\nPowered by SentinelPR + Shree AI OS\n";
+        String emptyBlock = (findings == null || findings.isEmpty())
+                ? "```diff\n# No patch required\n```\n\n---\nPowered by SentinelPR + Shree AI OS\n"
+                : "```diff\n# Manual remediation required (automated patch synthesis unavailable for target language or rule)\n```\n\n---\nPowered by SentinelPR + Shree AI OS\n";
 
         if (diffBuilder.length() > 0) {
             sb.append("```diff\n");
