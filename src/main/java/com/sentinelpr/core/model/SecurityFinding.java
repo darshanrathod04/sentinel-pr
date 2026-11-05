@@ -34,6 +34,19 @@ public class SecurityFinding {
             String className,
             String methodName,
             int startLine,
+            double confidence
+    ) {
+        this(id, rule, severity, targetFile, className, methodName, startLine, startLine, "", rule != null ? rule.getExplanation() : "", "", "", confidence, null, null);
+    }
+
+    public SecurityFinding(
+            String id,
+            SecurityRule rule,
+            Severity severity,
+            String targetFile,
+            String className,
+            String methodName,
+            int startLine,
             int endLine,
             String vulnerableSnippet,
             String description,

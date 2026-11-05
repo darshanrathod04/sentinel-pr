@@ -32,14 +32,18 @@ public class ProjectFacade {
 
     private final ProjectSDK projectSdk;
     private final JavaAstParser astParser;
-    private final JavaParser javaParser;
+    private final ThreadLocal<JavaParser> threadLocalParser;
+    private final com.sentinelpr.core.analysis.multilang.MultiLanguageSourceParser multiLanguageParser;
 
     public ProjectFacade(ProjectSDK projectSdk) {
         this.projectSdk = Objects.requireNonNull(projectSdk, "projectSdk must not be null");
         this.astParser = new JavaAstParser();
-        ParserConfiguration config = new ParserConfiguration();
-        config.setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_21);
-        this.javaParser = new JavaParser(config);
+        this.threadLocalParser = ThreadLocal.withInitial(() -> {
+            ParserConfiguration config = new ParserConfiguration();
+            config.setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_21);
+            return new JavaParser(config);
+        });
+        this.multiLanguageParser = new com.sentinelpr.core.analysis.multilang.MultiLanguageSourceParser();
     }
 
     /**
@@ -56,7 +60,10 @@ public class ProjectFacade {
      */
     public InspectedSource parseAst(String source, Path path) {
         Objects.requireNonNull(source, "source must not be null");
-        Optional<CompilationUnit> cuResult = javaParser.parse(source).getResult();
+        if (path != null && com.sentinelpr.core.model.SourceLanguage.fromPath(path) != com.sentinelpr.core.model.SourceLanguage.JAVA) {
+            return multiLanguageParser.parse(source, path);
+        }
+        Optional<CompilationUnit> cuResult = threadLocalParser.get().parse(source).getResult();
         if (cuResult.isEmpty()) {
             throw new IllegalArgumentException("Failed to parse Java source: syntactically invalid Java code");
         }

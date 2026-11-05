@@ -73,6 +73,42 @@ public class PatchComposer {
                 ? source.getFilePath().toString()
                 : "VulnerableService.java";
 
+        if (source.getLanguage() != com.sentinelpr.core.model.SourceLanguage.JAVA) {
+            String combinedFindingIds = findings.stream()
+                    .map(SecurityFinding::getId)
+                    .collect(Collectors.joining(", "));
+            String combinedRuleIds = findings.stream()
+                    .map(f -> f.getRule().getRuleId())
+                    .distinct()
+                    .collect(Collectors.joining(", "));
+            String langName = source.getLanguage().name();
+            String manualMsg = "Manual remediation required: Automated AST patch synthesis and regression verification are restricted to Java 21 LTS sources. Non-Java files (" + langName + ") require manual remediation.";
+
+            PatchQualityMetrics qualityMetrics = new PatchQualityMetrics(
+                    false,
+                    false,
+                    false,
+                    false,
+                    "MANUAL_REMEDIATION_REQUIRED",
+                    List.of("MANUAL_REMEDIATION_REQUIRED"),
+                    "Automated patch generation not supported for " + langName
+            );
+
+            return new UnifiedDiffPatch(
+                    combinedFindingIds,
+                    combinedRuleIds,
+                    targetFilePath,
+                    "",
+                    originalSource,
+                    UnifiedDiffPatch.Status.MANUAL_REMEDIATION_REQUIRED,
+                    false,
+                    false,
+                    manualMsg,
+                    qualityMetrics,
+                    PatchValidationStatus.MANUAL_REMEDIATION_REQUIRED
+            );
+        }
+
         // Sort findings in deterministic order
         List<SecurityFinding> sortedFindings = new ArrayList<>(findings);
         sortedFindings.sort(Comparator.comparingInt(this::rulePriority));
@@ -305,9 +341,19 @@ public class PatchComposer {
             case HARDCODED_SECRET -> 8;
             case SPRING_SECURITY_CSRF_DISABLED -> 9;
             case SPRING_PERMISSIVE_CORS -> 10;
-            case ARCH_CYCLIC_DEPENDENCY -> 11;
-            case ARCH_LEAKY_ABSTRACTION -> 12;
-            case ARCH_NON_DETERMINISTIC_CALL -> 13;
+            case XXE_INJECTION -> 11;
+            case SSRF -> 12;
+            case JWT_NONE_ALGORITHM -> 13;
+            case LOG_INJECTION -> 14;
+            case LDAP_INJECTION -> 15;
+            case XPATH_INJECTION -> 16;
+            case OPEN_REDIRECT -> 17;
+            case WEAK_CRYPTO -> 18;
+            case INSECURE_RANDOM -> 19;
+            case XSS -> 20;
+            case ARCH_CYCLIC_DEPENDENCY -> 21;
+            case ARCH_LEAKY_ABSTRACTION -> 22;
+            case ARCH_NON_DETERMINISTIC_CALL -> 23;
         };
     }
 

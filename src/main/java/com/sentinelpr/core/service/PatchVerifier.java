@@ -66,6 +66,17 @@ public class PatchVerifier {
 
         String pathStr = (simPath != null && !simPath.isBlank()) ? simPath : "PatchedService.java";
 
+        com.sentinelpr.core.model.SourceLanguage lang = com.sentinelpr.core.model.SourceLanguage.fromFileName(pathStr);
+        if (lang != com.sentinelpr.core.model.SourceLanguage.JAVA) {
+            return new PatchVerificationResult(
+                    false,
+                    false,
+                    Collections.emptyList(),
+                    "Automated AST verification is not supported for non-Java source (" + lang.name() + "). Manual remediation required.",
+                    PatchValidationStatus.MANUAL_REMEDIATION_REQUIRED
+            );
+        }
+
         // 1. Verify with JavaAstParser (Shree AI OS Project Kernel parser)
         try {
             astParser.parse(patchedSource, pathStr);

@@ -65,6 +65,68 @@ public enum SecurityRule {
             "CWE-942: Permissive CORS policy with wildcard origin '*' allows unauthorized cross-origin requests."
     ),
 
+    // Extended OWASP Top 10 Security Rules
+    XXE_INJECTION(
+            "SEC-011-XXE",
+            "XML External Entity (XXE) Injection",
+            Severity.CRITICAL,
+            "CWE-611: XML parser instantiated without disabling external DTDs or external entity resolution, allowing unauthorized file disclosure or SSRF."
+    ),
+    SSRF(
+            "SEC-012-SSRF",
+            "Server-Side Request Forgery (SSRF)",
+            Severity.CRITICAL,
+            "CWE-918: Unvalidated user input or dynamic URL passed directly into HTTP client requests without host allowlisting or containment validation."
+    ),
+    JWT_NONE_ALGORITHM(
+            "SEC-013-JWT-NONE-ALG",
+            "JWT Insecure None Algorithm or Signature Bypass",
+            Severity.CRITICAL,
+            "CWE-347: JSON Web Token parsed or validated with 'none' algorithm allowed, or token decoded without cryptographic signature verification."
+    ),
+    LOG_INJECTION(
+            "SEC-014-LOG-INJECTION",
+            "Log Injection and Forging",
+            Severity.HIGH,
+            "CWE-117: Unsanitized user input written directly to logging sinks allowing log forging or CRLF log splitting."
+    ),
+    LDAP_INJECTION(
+            "SEC-015-LDAP-INJECTION",
+            "LDAP Injection",
+            Severity.CRITICAL,
+            "CWE-90: Unsanitized input concatenated into LDAP search filters or DirContext queries without proper encoding."
+    ),
+    XPATH_INJECTION(
+            "SEC-016-XPATH-INJECTION",
+            "XPath Injection",
+            Severity.CRITICAL,
+            "CWE-643: User input concatenated directly into XPath expression compilation or evaluation without parameterized variables."
+    ),
+    OPEN_REDIRECT(
+            "SEC-017-OPEN-REDIRECT",
+            "Open Redirect",
+            Severity.HIGH,
+            "CWE-601: Untrusted URL or user-supplied target passed directly to HTTP redirection without allowlist validation."
+    ),
+    WEAK_CRYPTO(
+            "SEC-018-WEAK-CRYPTO",
+            "Broken or Risky Cryptographic Algorithm",
+            Severity.HIGH,
+            "CWE-327: Use of broken or obsolete cryptographic algorithms (MD5, SHA-1, DES, RC4, or AES/ECB) for security-sensitive operations."
+    ),
+    INSECURE_RANDOM(
+            "SEC-019-INSECURE-RANDOM",
+            "Insecure Randomness in Security Context",
+            Severity.HIGH,
+            "CWE-338: Use of cryptographically weak PRNG (java.util.Random, Math.random) for generating security tokens, keys, salts, or passwords."
+    ),
+    XSS(
+            "SEC-020-XSS",
+            "Cross-Site Scripting (XSS)",
+            Severity.HIGH,
+            "CWE-79: Unsanitized user input written directly to HTTP response output streams or HTML body without HTML entity encoding."
+    ),
+
     // Architectural Hygiene Rules (P4)
     ARCH_CYCLIC_DEPENDENCY(
             "ARCH-001-CYCLIC-DEPENDENCY",
@@ -124,6 +186,6 @@ public enum SecurityRule {
     }
 
     public static int getCoreSecurityRulesCount() {
-        return 10;
+        return getCoreSecurityRules().length;
     }
 }

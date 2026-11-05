@@ -80,6 +80,10 @@ public class InspectedSource {
         return filePath;
     }
 
+    public SourceLanguage getLanguage() {
+        return SourceLanguage.fromPath(filePath);
+    }
+
     public String getRawSource() {
         return rawSource;
     }

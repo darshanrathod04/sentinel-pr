@@ -21,7 +21,8 @@ public class UnifiedDiffPatch {
         PARTIAL,
         FAILED,
         SKIPPED,
-        DEFERRED_TO_MULTI_FILE_PLAN
+        DEFERRED_TO_MULTI_FILE_PLAN,
+        MANUAL_REMEDIATION_REQUIRED
     }
 
     private final String findingId;
