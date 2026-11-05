@@ -309,6 +309,7 @@ public class PythonSecurityRuleEngine {
     }
 
     private boolean isDynamicStringExpression(PythonAstNode node, PythonFunctionDef func, PythonModule module) {
+        if (node == null) return false;
         if (node instanceof PythonBinaryExpr bin) {
             return "+".equals(bin.getOperator()) || "%".equals(bin.getOperator());
         }
@@ -324,14 +325,7 @@ public class PythonSecurityRuleEngine {
             String varName = name.getName();
             for (PythonAssignStmt assign : func.getAssignments()) {
                 if (assign.getTargets().contains(varName)) {
-                    if (isDynamicStringExpression(assign.getValue(), func, module)) {
-                        return true;
-                    }
-                    if (assign.getRawText().contains("%") || assign.getRawText().contains(".format(")
-                            || assign.getRawText().contains("+") || assign.getRawText().contains("f\"")
-                            || assign.getRawText().contains("f'")) {
-                        return true;
-                    }
+                    return isDynamicStringExpression(assign.getValue(), func, module);
                 }
             }
         }
