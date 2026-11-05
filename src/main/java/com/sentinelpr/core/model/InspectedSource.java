@@ -39,6 +39,7 @@ public class InspectedSource {
     private final List<UnaryExpr> unaryExpressions;
     private final List<AssignExpr> assignExpressions;
     private final List<MethodCallExpr> methodCalls;
+    private final com.sentinelpr.core.analysis.multilang.python.ast.PythonModule pythonAst;
 
     public InspectedSource(
             Path filePath,
@@ -58,6 +59,30 @@ public class InspectedSource {
             List<AssignExpr> assignExpressions,
             List<MethodCallExpr> methodCalls
     ) {
+        this(filePath, rawSource, compilationUnit, packageName, primaryClassName, imports,
+                classDeclarations, methods, fields, catchClauses, tryStatements,
+                variableDeclarations, objectCreations, unaryExpressions, assignExpressions, methodCalls, null);
+    }
+
+    public InspectedSource(
+            Path filePath,
+            String rawSource,
+            CompilationUnit compilationUnit,
+            String packageName,
+            String primaryClassName,
+            List<String> imports,
+            List<ClassOrInterfaceDeclaration> classDeclarations,
+            List<MethodDeclaration> methods,
+            List<FieldDeclaration> fields,
+            List<CatchClause> catchClauses,
+            List<TryStmt> tryStatements,
+            List<VariableDeclarator> variableDeclarations,
+            List<ObjectCreationExpr> objectCreations,
+            List<UnaryExpr> unaryExpressions,
+            List<AssignExpr> assignExpressions,
+            List<MethodCallExpr> methodCalls,
+            com.sentinelpr.core.analysis.multilang.python.ast.PythonModule pythonAst
+    ) {
         this.filePath = filePath;
         this.rawSource = rawSource != null ? rawSource : "";
         this.compilationUnit = compilationUnit;
@@ -74,6 +99,7 @@ public class InspectedSource {
         this.unaryExpressions = unaryExpressions != null ? Collections.unmodifiableList(unaryExpressions) : List.of();
         this.assignExpressions = assignExpressions != null ? Collections.unmodifiableList(assignExpressions) : List.of();
         this.methodCalls = methodCalls != null ? Collections.unmodifiableList(methodCalls) : List.of();
+        this.pythonAst = pythonAst;
     }
 
     public Path getFilePath() {
@@ -156,5 +182,9 @@ public class InspectedSource {
             return compilationUnit.findAll(AnnotationExpr.class);
         }
         return Collections.emptyList();
+    }
+
+    public java.util.Optional<com.sentinelpr.core.analysis.multilang.python.ast.PythonModule> getPythonAst() {
+        return java.util.Optional.ofNullable(pythonAst);
     }
 }

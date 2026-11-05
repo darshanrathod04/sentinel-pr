@@ -36,6 +36,7 @@ public class MultiLanguageSourceParser {
         String packageName = "";
         String primaryClassName = extractDefaultClassName(path);
         List<String> imports = new ArrayList<>();
+        com.sentinelpr.core.analysis.multilang.python.ast.PythonModule pythonAst = null;
 
         switch (lang) {
             case KOTLIN -> {
@@ -53,15 +54,14 @@ public class MultiLanguageSourceParser {
                 }
             }
             case PYTHON -> {
-                Matcher impMatcher = PYTHON_IMPORT.matcher(source);
-                while (impMatcher.find()) {
-                    String fullImport = impMatcher.group(1) != null ? impMatcher.group(1)
-                            : (impMatcher.group(2) + "." + impMatcher.group(3));
-                    imports.add(fullImport);
+                com.sentinelpr.core.analysis.multilang.python.PythonSourceParser pyParser =
+                        new com.sentinelpr.core.analysis.multilang.python.PythonSourceParser();
+                pythonAst = pyParser.parse(source, path);
+                for (var imp : pythonAst.getImports()) {
+                    imports.add(imp.getEffectiveName());
                 }
-                Matcher clsMatcher = PYTHON_CLASS.matcher(source);
-                if (clsMatcher.find()) {
-                    primaryClassName = clsMatcher.group(1);
+                if (!pythonAst.getClasses().isEmpty()) {
+                    primaryClassName = pythonAst.getClasses().get(0).getName();
                 }
             }
             case JAVASCRIPT, TYPESCRIPT -> {
@@ -96,7 +96,8 @@ public class MultiLanguageSourceParser {
                 List.of(),
                 List.of(),
                 List.of(),
-                List.of()
+                List.of(),
+                pythonAst
         );
     }
 
