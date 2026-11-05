@@ -15,6 +15,9 @@ import java.util.*;
  */
 public class PythonSecurityRuleEngine {
 
+    private final com.sentinelpr.core.analysis.multilang.python.framework.PythonFrameworkSecurityEngine frameworkEngine =
+            new com.sentinelpr.core.analysis.multilang.python.framework.PythonFrameworkSecurityEngine();
+
     public List<SecurityFinding> evaluate(PythonModule module, InspectedSource source) {
         if (module == null) {
             return Collections.emptyList();
@@ -40,6 +43,9 @@ public class PythonSecurityRuleEngine {
                 evaluateCall(call, null, module, filePath, findings);
             }
         }
+
+        // Framework-specific intelligence (Flask, Django, FastAPI)
+        findings.addAll(frameworkEngine.evaluate(module, source));
 
         return findings;
     }

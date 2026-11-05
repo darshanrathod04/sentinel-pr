@@ -50,6 +50,15 @@ public class PythonSourceParser {
 
             int indent = getIndentation(rawLine);
 
+            // Join continuation lines for unclosed delimiters: (, [, {
+            while (hasUnclosedDelimiters(rawLine) && i + 1 < rawLines.length) {
+                i++;
+                String nextLine = rawLines[i].trim();
+                if (nextLine.startsWith("#")) continue;
+                rawLine = rawLine + " " + nextLine;
+            }
+            trimmed = rawLine.trim();
+
             // Handle decorators
             if (trimmed.startsWith("@")) {
                 PythonDecorator dec = parseDecorator(rawLine, lineNum);
@@ -336,6 +345,15 @@ public class PythonSourceParser {
 
             int indent = getIndentation(rawLine);
 
+            // Join continuation lines for unclosed delimiters: (, [, {
+            while (hasUnclosedDelimiters(rawLine) && i + 1 < lines.size()) {
+                i++;
+                String nextLine = lines.get(i).trim();
+                if (nextLine.startsWith("#")) continue;
+                rawLine = rawLine + " " + nextLine;
+            }
+            trimmed = rawLine.trim();
+
             // Docstring check at start of block
             if (result.docstring.isEmpty() && (trimmed.startsWith("\"\"\"") || trimmed.startsWith("'''"))) {
                 result.docstring = extractDocstring(lines, i);
@@ -418,6 +436,15 @@ public class PythonSourceParser {
             }
 
             int indent = getIndentation(rawLine);
+
+            // Join continuation lines for unclosed delimiters: (, [, {
+            while (hasUnclosedDelimiters(rawLine) && i + 1 < lines.size()) {
+                i++;
+                String nextLine = lines.get(i).trim();
+                if (nextLine.startsWith("#")) continue;
+                rawLine = rawLine + " " + nextLine;
+            }
+            trimmed = rawLine.trim();
 
             // Docstring check
             if (result.docstring.isEmpty() && (trimmed.startsWith("\"\"\"") || trimmed.startsWith("'''"))) {
@@ -1052,5 +1079,32 @@ public class PythonSourceParser {
         }
 
         return new PythonIfStmt(lineNum, parentIndent, lineOffset + i, 0, lines[ifLineIdx], condition, thenBranch, elseBranch);
+    }
+
+    private boolean hasUnclosedDelimiters(String text) {
+        if (text == null) return false;
+        int depthParen = 0;
+        int depthBracket = 0;
+        int depthBrace = 0;
+        boolean inSingleQuote = false;
+        boolean inDoubleQuote = false;
+
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == '\'' && !inDoubleQuote && (i == 0 || text.charAt(i - 1) != '\\')) {
+                inSingleQuote = !inSingleQuote;
+            } else if (c == '"' && !inSingleQuote && (i == 0 || text.charAt(i - 1) != '\\')) {
+                inDoubleQuote = !inDoubleQuote;
+            }
+            if (inSingleQuote || inDoubleQuote) continue;
+
+            if (c == '(') depthParen++;
+            else if (c == ')') depthParen--;
+            else if (c == '[') depthBracket++;
+            else if (c == ']') depthBracket--;
+            else if (c == '{') depthBrace++;
+            else if (c == '}') depthBrace--;
+        }
+        return depthParen > 0 || depthBracket > 0 || depthBrace > 0;
     }
 }
