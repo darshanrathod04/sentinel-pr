@@ -162,4 +162,69 @@ public class PythonFrameworkSecurityTest {
         assertFalse(safeFindings.stream().anyMatch(f -> f.getRule() == SecurityRule.SPRING_PERMISSIVE_CORS),
                 "Explicit allow_origins must not be flagged");
     }
+
+    @Test
+    @DisplayName("Phase 5.2 M3: Cookie security attributes (HttpOnly, Secure, SameSite)")
+    void testCookieSecurityAttributes() {
+        // 1. Insecure session cookie (missing HttpOnly and Secure)
+        String vulnCookie = """
+                from flask import Flask, make_response
+                app = Flask(__name__)
+
+                @app.route("/login")
+                def login():
+                    resp = make_response("logged in")
+                    resp.set_cookie("session_id", "secret123")
+                    return resp
+                """;
+        InspectedSource vulnSource = inspectionService.inspectSourceCode(vulnCookie, "login.py");
+        List<SecurityFinding> vulnFindings = evaluationService.evaluate(vulnSource);
+        assertTrue(vulnFindings.stream().anyMatch(f -> f.getRule() == SecurityRule.FAIL_OPEN_SECURITY && f.getDescription().contains("session_id")),
+                "Must flag session_id cookie missing HttpOnly and Secure");
+
+        // 2. Insecure auth cookie with secure=False
+        String vulnCookie2 = """
+                from django.http import HttpResponse
+                def auth_handler(request):
+                    response = HttpResponse("ok")
+                    response.set_cookie("auth_token", "jwt.token.val", httponly=True, secure=False)
+                    return response
+                """;
+        InspectedSource vulnSource2 = inspectionService.inspectSourceCode(vulnCookie2, "auth.py");
+        List<SecurityFinding> vulnFindings2 = evaluationService.evaluate(vulnSource2);
+        assertTrue(vulnFindings2.stream().anyMatch(f -> f.getRule() == SecurityRule.FAIL_OPEN_SECURITY && f.getDescription().contains("auth_token")),
+                "Must flag auth_token cookie with secure=False");
+
+        // 3. Safe session cookie with httponly=True and secure=True
+        String safeCookie = """
+                from flask import Flask, make_response
+                app = Flask(__name__)
+
+                @app.route("/login")
+                def login_safe():
+                    resp = make_response("logged in")
+                    resp.set_cookie("session_id", "secret123", httponly=True, secure=True, samesite="Lax")
+                    return resp
+                """;
+        InspectedSource safeSource = inspectionService.inspectSourceCode(safeCookie, "login_safe.py");
+        List<SecurityFinding> safeFindings = evaluationService.evaluate(safeSource);
+        assertFalse(safeFindings.stream().anyMatch(f -> f.getDescription().contains("session_id")),
+                "Fully secured session cookie must not be flagged");
+
+        // 4. Safe non-sensitive cookie (theme, language) without security flags
+        String harmlessCookie = """
+                from flask import Flask, make_response
+                app = Flask(__name__)
+
+                @app.route("/theme")
+                def set_theme():
+                    resp = make_response("theme updated")
+                    resp.set_cookie("ui_theme", "dark_mode")
+                    return resp
+                """;
+        InspectedSource harmlessSource = inspectionService.inspectSourceCode(harmlessCookie, "theme.py");
+        List<SecurityFinding> harmlessFindings = evaluationService.evaluate(harmlessSource);
+        assertFalse(harmlessFindings.stream().anyMatch(f -> f.getDescription().contains("ui_theme")),
+                "Non-sensitive UI cookie must not produce false positive");
+    }
 }

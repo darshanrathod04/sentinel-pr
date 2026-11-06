@@ -32,6 +32,9 @@ public class PythonFrameworkSecurityEngine {
         // 3. FastAPI checks
         evaluateFastApi(module, filePath, findings);
 
+        // 4. Cookie security checks (Flask, Django, FastAPI)
+        evaluateCookieSecurity(module, filePath, findings);
+
         return findings;
     }
 
@@ -234,6 +237,69 @@ public class PythonFrameworkSecurityEngine {
                 }
             }
         }
+    }
+
+    private void evaluateCookieSecurity(PythonModule module, String filePath, List<SecurityFinding> findings) {
+        for (PythonCallExpr call : module.findAllCalls()) {
+            String shortCallee = call.getCalleeName();
+            if ("set_cookie".equals(shortCallee)) {
+                List<PythonAstNode> posArgs = call.getPositionalArguments();
+                String cookieName = "";
+                if (!posArgs.isEmpty()) {
+                    cookieName = posArgs.get(0).getRawText().replaceAll("['\"]", "").toLowerCase(Locale.ROOT);
+                } else {
+                    for (PythonArgument arg : call.getArguments()) {
+                        if ("key".equals(arg.getKeywordName())) {
+                            cookieName = arg.getValue() != null ? arg.getValue().getRawText().replaceAll("['\"]", "").toLowerCase(Locale.ROOT) : "";
+                        }
+                    }
+                }
+
+                if (isSensitiveCookieName(cookieName)) {
+                    boolean hasHttpOnly = false;
+                    boolean hasSecure = false;
+
+                    for (PythonArgument arg : call.getArguments()) {
+                        String kw = arg.getKeywordName();
+                        if ("httponly".equalsIgnoreCase(kw)) {
+                            hasHttpOnly = "True".equalsIgnoreCase(arg.getValue() != null ? arg.getValue().getRawText().trim() : "");
+                        } else if ("secure".equalsIgnoreCase(kw)) {
+                            hasSecure = "True".equalsIgnoreCase(arg.getValue() != null ? arg.getValue().getRawText().trim() : "");
+                        }
+                    }
+
+                    if (!hasHttpOnly || !hasSecure) {
+                        List<String> missingFlags = new ArrayList<>();
+                        if (!hasHttpOnly) missingFlags.add("httponly=True");
+                        if (!hasSecure) missingFlags.add("secure=True");
+
+                        findings.add(createFinding(
+                                SecurityRule.FAIL_OPEN_SECURITY,
+                                Severity.HIGH,
+                                filePath,
+                                "WebCookieHandler",
+                                "set_cookie",
+                                call.getLine(),
+                                call.getLine(),
+                                call.getRawText(),
+                                "Insecure Session Cookie: " + cookieName + " (missing " + String.join(", ", missingFlags) + ")",
+                                "Sensitive session/auth cookie '" + cookieName + "' configured without mandatory security flags (missing "
+                                        + String.join(", ", missingFlags) + "). Exposes session tokens to XSS exfiltration and plaintext HTTP interception (CWE-614 / CWE-1004).",
+                                "Set httponly=True, secure=True, and samesite='Lax' (or 'Strict') when setting authentication and session cookies.",
+                                0.95
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    private boolean isSensitiveCookieName(String name) {
+        if (name == null || name.isBlank()) return false;
+        String lower = name.toLowerCase(Locale.ROOT);
+        return lower.contains("session") || lower.contains("auth") || lower.contains("token")
+                || lower.contains("jwt") || lower.contains("user") || lower.contains("login")
+                || lower.contains("credentials") || lower.contains("csrf") || lower.contains("id_token");
     }
 
     private SecurityFinding createFinding(

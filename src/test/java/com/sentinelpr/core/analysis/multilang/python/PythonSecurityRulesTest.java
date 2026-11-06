@@ -285,4 +285,54 @@ public class PythonSecurityRulesTest {
         assertFalse(pathlibSafeFindings.stream().anyMatch(f -> f.getRule() == SecurityRule.PATH_TRAVERSAL),
                 "pathlib.Path / with pure static string literals must not produce false positive");
     }
+
+    @Test
+    @DisplayName("Phase 5.2 M3: TLS verification bypass (verify=False)")
+    void testTlsVerificationBypass() {
+        // 1. requests.get with verify=False
+        String requestsVuln = """
+                import requests
+                def call_api():
+                    return requests.get("https://internal.service/api", verify=False)
+                """;
+        InspectedSource reqSource = inspectionService.inspectSourceCode(requestsVuln, "client.py");
+        List<SecurityFinding> reqFindings = evaluationService.evaluate(reqSource);
+        assertTrue(reqFindings.stream().anyMatch(f -> f.getRule() == SecurityRule.FAIL_OPEN_SECURITY
+                && f.getDescription().contains("Disabled TLS Certificate Verification")),
+                "requests.get with verify=False must be flagged");
+
+        // 2. httpx.post with verify=False
+        String httpxVuln = """
+                import httpx
+                def send_webhook(payload):
+                    return httpx.post("https://payment.gateway/hook", json=payload, verify=False)
+                """;
+        InspectedSource httpxSource = inspectionService.inspectSourceCode(httpxVuln, "webhook.py");
+        List<SecurityFinding> httpxFindings = evaluationService.evaluate(httpxSource);
+        assertTrue(httpxFindings.stream().anyMatch(f -> f.getRule() == SecurityRule.FAIL_OPEN_SECURITY
+                && f.getDescription().contains("Disabled TLS Certificate Verification")),
+                "httpx.post with verify=False must be flagged");
+
+        // 3. requests.get with verify=True (explicit safe)
+        String requestsSafe = """
+                import requests
+                def call_safe():
+                    return requests.get("https://api.github.com/status", verify=True)
+                """;
+        InspectedSource safeReqSource = inspectionService.inspectSourceCode(requestsSafe, "client_safe.py");
+        List<SecurityFinding> safeReqFindings = evaluationService.evaluate(safeReqSource);
+        assertFalse(safeReqFindings.stream().anyMatch(f -> f.getDescription().contains("Disabled TLS")),
+                "verify=True must not be flagged");
+
+        // 4. requests.get with omitted verify (defaults to True)
+        String requestsDefault = """
+                import requests
+                def call_default():
+                    return requests.get("https://api.github.com/status")
+                """;
+        InspectedSource defReqSource = inspectionService.inspectSourceCode(requestsDefault, "client_def.py");
+        List<SecurityFinding> defReqFindings = evaluationService.evaluate(defReqSource);
+        assertFalse(defReqFindings.stream().anyMatch(f -> f.getDescription().contains("Disabled TLS")),
+                "Omitted verify parameter must not be flagged");
+    }
 }

@@ -232,8 +232,31 @@ public class PythonSecurityRuleEngine {
             }
         }
 
-        // 6. SSRF: requests.get, httpx.get, urllib.request.urlopen
+        // 6. SSRF & TLS Verification Bypass: requests.get, httpx.get, urllib.request.urlopen
         if (isHttpOutboundCallee(fullCallee)) {
+            // Check for explicitly disabled TLS verification: verify=False
+            for (PythonArgument arg : call.getArguments()) {
+                if ("verify".equals(arg.getKeywordName())) {
+                    PythonAstNode val = arg.getValue();
+                    if (val instanceof PythonLiteralExpr lit && "False".equalsIgnoreCase(lit.getValue())) {
+                        findings.add(createFinding(
+                                SecurityRule.FAIL_OPEN_SECURITY,
+                                Severity.CRITICAL,
+                                filePath,
+                                "Module",
+                                funcName,
+                                line,
+                                line,
+                                rawText,
+                                "Disabled TLS Certificate Verification (verify=False)",
+                                "TLS certificate validation is explicitly disabled (verify=False) in " + fullCallee + "(), enabling Man-in-the-Middle (MITM) credential interception and traffic spoofing (CWE-295 / CWE-393).",
+                                "Remove verify=False or supply a trusted CA certificate bundle path (verify='/path/to/ca.pem'). Never disable TLS verification in production code.",
+                                0.99
+                        ));
+                    }
+                }
+            }
+
             List<PythonAstNode> posArgs = call.getPositionalArguments();
             if (!posArgs.isEmpty()) {
                 PythonAstNode urlArg = posArgs.get(0);
@@ -439,10 +462,8 @@ public class PythonSecurityRuleEngine {
     }
 
     private boolean isHttpOutboundCallee(String fullCallee) {
-        return fullCallee.startsWith("requests.get") || fullCallee.startsWith("requests.post")
-                || fullCallee.startsWith("requests.put") || fullCallee.startsWith("requests.delete")
-                || fullCallee.startsWith("requests.request") || fullCallee.startsWith("httpx.get")
-                || fullCallee.startsWith("httpx.post") || fullCallee.startsWith("urllib.request.urlopen");
+        if (fullCallee == null) return false;
+        return fullCallee.startsWith("requests.") || fullCallee.startsWith("httpx.") || fullCallee.startsWith("urllib.request.urlopen");
     }
 
     private boolean isStaticHttpLiteral(PythonAstNode node) {
