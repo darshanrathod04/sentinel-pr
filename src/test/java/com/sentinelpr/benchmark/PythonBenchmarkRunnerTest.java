@@ -18,7 +18,7 @@ import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-@DisplayName("Phase 5.1: Governed Python Security Benchmark Suite (40 Cases)")
+@DisplayName("Phase 5.2: Hardened Python Security Benchmark Suite (50 Cases)")
 public class PythonBenchmarkRunnerTest {
 
     private CodeInspectionService inspectionService;
@@ -35,7 +35,7 @@ public class PythonBenchmarkRunnerTest {
     }
 
     @Test
-    @DisplayName("Evaluate Governed Python Benchmark Suite Ground Truth (20 Vuln, 20 Safe)")
+    @DisplayName("Evaluate Hardened Python Benchmark Suite Ground Truth (25 Vuln, 25 Safe)")
     void testPythonBenchmarkGroundTruth() throws IOException {
         Path vulnDir = BENCHMARK_DIR.resolve("vulnerable");
         Path safeDir = BENCHMARK_DIR.resolve("safe");
@@ -53,8 +53,8 @@ public class PythonBenchmarkRunnerTest {
             safeFiles = s.filter(p -> p.toString().endsWith(".py")).sorted().toList();
         }
 
-        assertEquals(20, vulnFiles.size(), "Benchmark must contain exactly 20 vulnerable fixtures");
-        assertEquals(20, safeFiles.size(), "Benchmark must contain exactly 20 safe control fixtures");
+        assertEquals(25, vulnFiles.size(), "Benchmark must contain exactly 25 vulnerable fixtures");
+        assertEquals(25, safeFiles.size(), "Benchmark must contain exactly 25 safe control fixtures");
 
         int tp = 0;
         int fn = 0;
@@ -122,14 +122,14 @@ public class PythonBenchmarkRunnerTest {
         System.out.println("===============================================================================");
 
         // Enforce honest ground-truth benchmark metrics
-        assertEquals(18, tp, "18 of 20 vulnerable fixtures detected in Phase 5.1 baseline (TP=18)");
+        assertEquals(25, tp, "All 25 vulnerable fixtures detected in Phase 5.2 hardened baseline (TP=25)");
         assertEquals(0, fp, "Zero false alarms allowed on safe fixtures (FP=0)");
-        assertEquals(20, tn, "All 20 safe fixtures must pass cleanly (TN=20)");
-        assertEquals(2, fn, "Exactly 2 known false negatives identified for Phase 5.2 hardening (FN=2)");
+        assertEquals(25, tn, "All 25 safe fixtures must pass cleanly (TN=25)");
+        assertEquals(0, fn, "Zero false negatives allowed in hardened baseline (FN=0)");
         assertEquals(100.0, precision, 0.001, "Precision must be 100.00%");
-        assertEquals(90.0, recall, 0.001, "Recall must be 90.00%");
+        assertEquals(100.0, recall, 0.001, "Recall must be 100.00%");
         assertEquals(100.0, specificity, 0.001, "Specificity must be 100.00%");
-        assertEquals(94.74, f1, 0.01, "F1-Score must be 94.74%");
-        assertEquals(18, manualRemediationCount, "100% of detected Python findings must enforce MANUAL_REMEDIATION_REQUIRED");
+        assertEquals(100.0, f1, 0.01, "F1-Score must be 100.00%");
+        assertEquals(25, manualRemediationCount, "100% of detected Python findings must enforce MANUAL_REMEDIATION_REQUIRED");
     }
 }
