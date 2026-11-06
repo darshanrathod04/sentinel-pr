@@ -588,21 +588,93 @@ public class PythonSourceParser {
         return -1;
     }
 
+    private boolean isEscaped(String text, int index) {
+        int backslashCount = 0;
+        for (int j = index - 1; j >= 0 && text.charAt(j) == '\\'; j--) {
+            backslashCount++;
+        }
+        return backslashCount % 2 != 0;
+    }
+
+    private static class StringLiteralInfo {
+        final boolean isLiteral;
+        final PythonLiteralExpr.Kind kind;
+        final String content;
+
+        StringLiteralInfo(boolean isLiteral, PythonLiteralExpr.Kind kind, String content) {
+            this.isLiteral = isLiteral;
+            this.kind = kind;
+            this.content = content;
+        }
+    }
+
+    private StringLiteralInfo parseStringLiteralInfo(String text) {
+        if (text == null || text.isBlank()) {
+            return new StringLiteralInfo(false, null, null);
+        }
+        String trimmed = text.trim();
+        int len = trimmed.length();
+        if (len < 2) {
+            return new StringLiteralInfo(false, null, null);
+        }
+
+        // Prefix detection: r, f, b, u, rf, fr, br, rb (case-insensitive)
+        int prefixEnd = 0;
+        while (prefixEnd < len && Character.isLetter(trimmed.charAt(prefixEnd))) {
+            prefixEnd++;
+        }
+        String prefix = trimmed.substring(0, prefixEnd).toLowerCase(Locale.ROOT);
+        boolean isFString = prefix.contains("f");
+
+        if (prefixEnd >= len) {
+            return new StringLiteralInfo(false, null, null);
+        }
+
+        String rem = trimmed.substring(prefixEnd);
+        String delimiter = null;
+        if (rem.startsWith("\"\"\"")) delimiter = "\"\"\"";
+        else if (rem.startsWith("'''")) delimiter = "'''";
+        else if (rem.startsWith("\"")) delimiter = "\"";
+        else if (rem.startsWith("'")) delimiter = "'";
+
+        if (delimiter == null) {
+            return new StringLiteralInfo(false, null, null);
+        }
+
+        int delimLen = delimiter.length();
+        int contentStart = prefixEnd + delimLen;
+        int endIdx = -1;
+
+        for (int i = contentStart; i <= len - delimLen; i++) {
+            if (trimmed.startsWith(delimiter, i) && !isEscaped(trimmed, i)) {
+                endIdx = i;
+                break;
+            }
+        }
+
+        if (endIdx != -1 && endIdx + delimLen == len) {
+            PythonLiteralExpr.Kind kind = isFString ? PythonLiteralExpr.Kind.FSTRING : PythonLiteralExpr.Kind.STRING;
+            return new StringLiteralInfo(true, kind, trimmed);
+        }
+
+        return new StringLiteralInfo(false, null, null);
+    }
+
     public PythonAstNode parseExpression(String expr, int lineNum, int col) {
         if (expr == null || expr.isBlank()) {
             return null;
         }
         String trimmed = expr.trim();
 
-        // 1. String literal
-        if ((trimmed.startsWith("\"") && trimmed.endsWith("\"")) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
-            return new PythonLiteralExpr(lineNum, col, lineNum, col + trimmed.length(), trimmed, PythonLiteralExpr.Kind.STRING, trimmed);
-        }
-        if ((trimmed.startsWith("f\"") && trimmed.endsWith("\"")) || (trimmed.startsWith("f'") && trimmed.endsWith("'"))) {
-            return new PythonLiteralExpr(lineNum, col, lineNum, col + trimmed.length(), trimmed, PythonLiteralExpr.Kind.FSTRING, trimmed);
+        // 0. Unwrap outer parentheses if they enclose the entire expression, e.g. (a + b)
+        if (trimmed.startsWith("(") && trimmed.endsWith(")")) {
+            int matching = findMatchingParenStart(trimmed);
+            if (matching == 0) {
+                return parseExpression(trimmed.substring(1, trimmed.length() - 1), lineNum, col + 1);
+            }
         }
 
-        // 2. Binary operations (+ or %) at top level
+        // 1. Binary operations (+ or %) at top level (must precede string literal check for concatenations)
         int binOpIdx = findTopLevelBinaryOp(trimmed, "+");
         if (binOpIdx > 0) {
             String leftPart = trimmed.substring(0, binOpIdx).trim();
@@ -619,6 +691,12 @@ public class PythonSourceParser {
             PythonAstNode left = parseExpression(leftPart, lineNum, col);
             PythonAstNode right = parseExpression(rightPart, lineNum, col + modOpIdx + 1);
             return new PythonBinaryExpr(lineNum, col, lineNum, col + trimmed.length(), trimmed, left, "%", right);
+        }
+
+        // 2. Complete String literal (atomic single or triple-quoted string, optionally prefixed)
+        StringLiteralInfo litInfo = parseStringLiteralInfo(trimmed);
+        if (litInfo.isLiteral) {
+            return new PythonLiteralExpr(lineNum, col, lineNum, col + trimmed.length(), trimmed, litInfo.kind, trimmed);
         }
 
         // 3. Subscript expression: target[index]
@@ -757,18 +835,51 @@ public class PythonSourceParser {
         int depthBrace = 0;
         boolean inSingleQuote = false;
         boolean inDoubleQuote = false;
+        boolean inTripleSingle = false;
+        boolean inTripleDouble = false;
 
         for (int i = 0; i < text.length(); i++) {
-            char c = text.charAt(i);
-
-            if (c == '\'' && !inDoubleQuote && (i == 0 || text.charAt(i - 1) != '\\')) {
-                inSingleQuote = !inSingleQuote;
-            } else if (c == '"' && !inSingleQuote && (i == 0 || text.charAt(i - 1) != '\\')) {
-                inDoubleQuote = !inDoubleQuote;
+            if (!inSingleQuote && !inDoubleQuote && !inTripleSingle && !inTripleDouble) {
+                if (text.startsWith("\"\"\"", i)) {
+                    inTripleDouble = true;
+                    i += 2;
+                    continue;
+                } else if (text.startsWith("'''", i)) {
+                    inTripleSingle = true;
+                    i += 2;
+                    continue;
+                } else if (text.charAt(i) == '"') {
+                    inDoubleQuote = true;
+                    continue;
+                } else if (text.charAt(i) == '\'') {
+                    inSingleQuote = true;
+                    continue;
+                }
+            } else if (inTripleDouble) {
+                if (text.startsWith("\"\"\"", i) && !isEscaped(text, i)) {
+                    inTripleDouble = false;
+                    i += 2;
+                }
+                continue;
+            } else if (inTripleSingle) {
+                if (text.startsWith("'''", i) && !isEscaped(text, i)) {
+                    inTripleSingle = false;
+                    i += 2;
+                }
+                continue;
+            } else if (inDoubleQuote) {
+                if (text.charAt(i) == '"' && !isEscaped(text, i)) {
+                    inDoubleQuote = false;
+                }
+                continue;
+            } else if (inSingleQuote) {
+                if (text.charAt(i) == '\'' && !isEscaped(text, i)) {
+                    inSingleQuote = false;
+                }
+                continue;
             }
 
-            if (inSingleQuote || inDoubleQuote) continue;
-
+            char c = text.charAt(i);
             if (c == '(') depthParen++;
             else if (c == ')') depthParen--;
             else if (c == '[') depthBracket++;

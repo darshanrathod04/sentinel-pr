@@ -148,4 +148,65 @@ public class PythonParserAuditTest {
         assertTrue(sources.stream().anyMatch(s -> s.getFilePath().toString().endsWith("valid.py")),
                 "Valid Python file must be successfully inspected despite corrupted sibling");
     }
+
+    @Test
+    @DisplayName("Phase 5.2 M1: String concatenation correctly parsed as binary expression vs atomic literal")
+    void testStringConcatenationVersusStaticLiterals() {
+        // 1. Tainted SQL concatenation starting and ending with quotes
+        String concatExpr = "\"SELECT * FROM users WHERE role = '\" + role_filter + \"'\"";
+        PythonAstNode parsedConcat = parser.parseExpression(concatExpr, 1, 0);
+        assertNotNull(parsedConcat);
+        assertInstanceOf(PythonBinaryExpr.class, parsedConcat, "Concatenation must be parsed as PythonBinaryExpr");
+        PythonBinaryExpr bin = (PythonBinaryExpr) parsedConcat;
+        assertEquals("+", bin.getOperator());
+        assertInstanceOf(PythonLiteralExpr.class, bin.getLeft());
+        assertInstanceOf(PythonBinaryExpr.class, bin.getRight());
+
+        // 2. Genuine static SQL literal
+        String staticLiteral = "\"SELECT * FROM users WHERE role = 'admin'\"";
+        PythonAstNode parsedStatic = parser.parseExpression(staticLiteral, 2, 0);
+        assertNotNull(parsedStatic);
+        assertInstanceOf(PythonLiteralExpr.class, parsedStatic, "Static string must parse as PythonLiteralExpr");
+        PythonLiteralExpr lit = (PythonLiteralExpr) parsedStatic;
+        assertEquals(PythonLiteralExpr.Kind.STRING, lit.getKind());
+
+        // 3. F-string literal
+        String fstring = "f\"SELECT * FROM users WHERE role = '{role_filter}'\"";
+        PythonAstNode parsedFString = parser.parseExpression(fstring, 3, 0);
+        assertNotNull(parsedFString);
+        assertInstanceOf(PythonLiteralExpr.class, parsedFString);
+        assertEquals(PythonLiteralExpr.Kind.FSTRING, ((PythonLiteralExpr) parsedFString).getKind());
+
+        // 4. Raw string literal
+        String rawString = "r\"C:\\Users\\default\\AppData\\Local\"";
+        PythonAstNode parsedRaw = parser.parseExpression(rawString, 4, 0);
+        assertNotNull(parsedRaw);
+        assertInstanceOf(PythonLiteralExpr.class, parsedRaw);
+        assertEquals(PythonLiteralExpr.Kind.STRING, ((PythonLiteralExpr) parsedRaw).getKind());
+
+        // 5. Escaped quote string
+        String escaped = "\"This has \\\"escaped\\\" quotes\"";
+        PythonAstNode parsedEscaped = parser.parseExpression(escaped, 5, 0);
+        assertNotNull(parsedEscaped);
+        assertInstanceOf(PythonLiteralExpr.class, parsedEscaped);
+
+        // 6. Triple-quoted block
+        String triple = "'''SELECT * FROM table WHERE active = 1'''";
+        PythonAstNode parsedTriple = parser.parseExpression(triple, 6, 0);
+        assertNotNull(parsedTriple);
+        assertInstanceOf(PythonLiteralExpr.class, parsedTriple);
+    }
+
+    @Test
+    @DisplayName("Phase 5.2 M1: Parenthesized expressions and ambiguous operations")
+    void testParenthesizedAndAmbiguousExpressions() {
+        String parenthesized = "(\"prefix_\" + user_id)";
+        PythonAstNode parsed = parser.parseExpression(parenthesized, 1, 0);
+        assertNotNull(parsed);
+        assertInstanceOf(PythonBinaryExpr.class, parsed, "Enclosing parentheses must be unwrapped for binary operation");
+
+        String malformedIncomplete = "\"unclosed string + var";
+        PythonAstNode parsedMalformed = parser.parseExpression(malformedIncomplete, 2, 0);
+        assertNotNull(parsedMalformed, "Must handle malformed expression gracefully without crashing");
+    }
 }
