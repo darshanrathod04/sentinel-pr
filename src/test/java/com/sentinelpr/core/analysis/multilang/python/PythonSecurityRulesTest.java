@@ -222,4 +222,67 @@ public class PythonSecurityRulesTest {
         assertFalse(safeFindings.stream().anyMatch(f -> f.getRule() == SecurityRule.INSECURE_RANDOM),
                 "dice roll and secrets.token_hex must not be flagged as insecure random");
     }
+
+    @Test
+    @DisplayName("Phase 5.2 M2: Dynamic path evaluation across os.path.join and pathlib.Path with multi-hop taint")
+    void testDynamicPathEvaluationMultiHop() {
+        // 1. os.path.join with multi-hop taint from request
+        String osJoinVuln = """
+                import os
+                def handle_download(request):
+                    raw_id = request.args.get("file")
+                    filename = raw_id
+                    target_dir = "/app/storage"
+                    full_path = os.path.join(target_dir, filename)
+                    with open(full_path, "r") as f:
+                        return f.read()
+                """;
+        InspectedSource osJoinSource = inspectionService.inspectSourceCode(osJoinVuln, "download.py");
+        List<SecurityFinding> osJoinFindings = evaluationService.evaluate(osJoinSource);
+        assertTrue(osJoinFindings.stream().anyMatch(f -> f.getRule() == SecurityRule.PATH_TRAVERSAL),
+                "os.path.join with multi-hop request argument must be flagged as PATH_TRAVERSAL");
+
+        // 2. pathlib.Path division with tainted variable
+        String pathlibVuln = """
+                from pathlib import Path
+                def load_user_doc(request):
+                    doc_name = request.args.get("doc")
+                    base = Path("/var/docs")
+                    target = base / doc_name
+                    with open(target, "rb") as f:
+                        return f.read()
+                """;
+        InspectedSource pathlibSource = inspectionService.inspectSourceCode(pathlibVuln, "pathlib_test.py");
+        List<SecurityFinding> pathlibFindings = evaluationService.evaluate(pathlibSource);
+        assertTrue(pathlibFindings.stream().anyMatch(f -> f.getRule() == SecurityRule.PATH_TRAVERSAL),
+                "pathlib.Path / operator with tainted input must be flagged as PATH_TRAVERSAL");
+
+        // 3. Safe static path with os.path.join (all static literals)
+        String osJoinSafe = """
+                import os
+                def read_config():
+                    static_base = "/etc/myapp"
+                    config_file = os.path.join(static_base, "settings.json")
+                    with open(config_file, "r") as f:
+                        return f.read()
+                """;
+        InspectedSource osJoinSafeSource = inspectionService.inspectSourceCode(osJoinSafe, "config.py");
+        List<SecurityFinding> osJoinSafeFindings = evaluationService.evaluate(osJoinSafeSource);
+        assertFalse(osJoinSafeFindings.stream().anyMatch(f -> f.getRule() == SecurityRule.PATH_TRAVERSAL),
+                "os.path.join with pure static string literals must not produce false positive");
+
+        // 4. Safe static path with pathlib.Path division
+        String pathlibSafe = """
+                from pathlib import Path
+                def read_banner():
+                    base = Path("/opt/assets")
+                    banner = base / "banner.txt"
+                    with open(banner, "r") as f:
+                        return f.read()
+                """;
+        InspectedSource pathlibSafeSource = inspectionService.inspectSourceCode(pathlibSafe, "banner.py");
+        List<SecurityFinding> pathlibSafeFindings = evaluationService.evaluate(pathlibSafeSource);
+        assertFalse(pathlibSafeFindings.stream().anyMatch(f -> f.getRule() == SecurityRule.PATH_TRAVERSAL),
+                "pathlib.Path / with pure static string literals must not produce false positive");
+    }
 }

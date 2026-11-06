@@ -333,26 +333,92 @@ public class PythonSecurityRuleEngine {
     }
 
     private boolean isDynamicPathExpression(PythonAstNode node, PythonFunctionDef func) {
-        if (node instanceof PythonBinaryExpr bin) {
-            return "+".equals(bin.getOperator());
-        }
+        return isDynamicPathExpression(node, func, new HashSet<>());
+    }
+
+    private boolean isDynamicPathExpression(PythonAstNode node, PythonFunctionDef func, Set<String> visitedVars) {
+        if (node == null) return false;
+
+        // 1. Literal expressions: F-strings are dynamic, static strings and numbers are not
         if (node instanceof PythonLiteralExpr lit) {
             return lit.getKind() == PythonLiteralExpr.Kind.FSTRING;
         }
+
+        // 2. Binary operations (+ for concatenation, / for pathlib path resolution)
+        if (node instanceof PythonBinaryExpr bin) {
+            String op = bin.getOperator();
+            if ("+".equals(op) || "/".equals(op)) {
+                return isDynamicPathExpression(bin.getLeft(), func, visitedVars)
+                        || isDynamicPathExpression(bin.getRight(), func, visitedVars);
+            }
+        }
+
+        // 3. Call expressions: os.path.join, Path(...), direct input calls
+        if (node instanceof PythonCallExpr call) {
+            String fullCallee = call.getFullCalleeName();
+            String shortCallee = call.getCalleeName();
+
+            // Direct input sources
+            if (isInputSourceCallee(fullCallee)) {
+                return true;
+            }
+
+            // Path construction / joining calls
+            if (isPathJoinCallee(fullCallee, shortCallee)) {
+                for (PythonAstNode arg : call.getPositionalArguments()) {
+                    if (isDynamicPathExpression(arg, func, visitedVars)) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+        }
+
+        // 4. Subscript expressions: sys.argv[1], os.environ["KEY"], request.args["file"]
+        if (node instanceof PythonSubscriptExpr sub) {
+            String targetText = sub.getTarget() != null ? sub.getTarget().getRawText() : "";
+            if (targetText.contains("sys.argv") || targetText.contains("os.environ")
+                    || targetText.contains("request.args") || targetText.contains("request.GET")
+                    || targetText.contains("request.POST")) {
+                return true;
+            }
+        }
+
+        // 5. Variable names: check function parameters and local assignments
         if (node instanceof PythonNameExpr name && func != null) {
-            // Check if variable is derived from function parameter or request
             String varName = name.getName();
+            if (!visitedVars.add(varName)) {
+                return false; // recursion guard
+            }
+
+            // Function parameter passed into path sink
             if (func.getParameters().contains(varName)) {
                 return true;
             }
+
+            // Local assignments in function scope
             for (PythonAssignStmt assign : func.getAssignments()) {
                 if (assign.getTargets().contains(varName)) {
-                    return isDynamicPathExpression(assign.getValue(), func);
+                    return isDynamicPathExpression(assign.getValue(), func, visitedVars);
                 }
             }
-            return true;
         }
+
         return false;
+    }
+
+    private boolean isInputSourceCallee(String fullCallee) {
+        if (fullCallee == null) return false;
+        return fullCallee.contains("request.args") || fullCallee.contains("request.form")
+                || fullCallee.contains("request.values") || fullCallee.contains("request.GET")
+                || fullCallee.contains("request.POST") || fullCallee.contains("request.query_params")
+                || fullCallee.contains("os.environ.get") || "input".equals(fullCallee);
+    }
+
+    private boolean isPathJoinCallee(String fullCallee, String shortCallee) {
+        if (fullCallee == null) return false;
+        return fullCallee.equals("os.path.join") || fullCallee.equals("Path") || fullCallee.equals("pathlib.Path")
+                || fullCallee.equals("os.path.expanduser") || "joinpath".equals(shortCallee);
     }
 
     private boolean hasPathContainmentGuard(PythonFunctionDef func) {

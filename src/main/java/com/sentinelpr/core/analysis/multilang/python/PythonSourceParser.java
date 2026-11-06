@@ -693,6 +693,15 @@ public class PythonSourceParser {
             return new PythonBinaryExpr(lineNum, col, lineNum, col + trimmed.length(), trimmed, left, "%", right);
         }
 
+        int slashOpIdx = findTopLevelBinaryOp(trimmed, "/");
+        if (slashOpIdx > 0) {
+            String leftPart = trimmed.substring(0, slashOpIdx).trim();
+            String rightPart = trimmed.substring(slashOpIdx + 1).trim();
+            PythonAstNode left = parseExpression(leftPart, lineNum, col);
+            PythonAstNode right = parseExpression(rightPart, lineNum, col + slashOpIdx + 1);
+            return new PythonBinaryExpr(lineNum, col, lineNum, col + trimmed.length(), trimmed, left, "/", right);
+        }
+
         // 2. Complete String literal (atomic single or triple-quoted string, optionally prefixed)
         StringLiteralInfo litInfo = parseStringLiteralInfo(trimmed);
         if (litInfo.isLiteral) {
@@ -891,6 +900,8 @@ public class PythonSourceParser {
                 if (op.equals("+") && c == '+') {
                     return i;
                 } else if (op.equals("%") && c == '%') {
+                    return i;
+                } else if (op.equals("/") && c == '/' && (i + 1 == text.length() || text.charAt(i + 1) != '/') && (i == 0 || text.charAt(i - 1) != '/')) {
                     return i;
                 } else if (op.equals("=") && c == '=' && (i + 1 == text.length() || text.charAt(i + 1) != '=') && (i == 0 || text.charAt(i - 1) != '=')) {
                     return i;
