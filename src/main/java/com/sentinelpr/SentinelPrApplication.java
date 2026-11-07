@@ -28,8 +28,36 @@ import java.nio.file.Path;
 @SpringBootApplication
 public class SentinelPrApplication {
 
+    public static boolean isServerMode(String[] args) {
+        if ("server".equalsIgnoreCase(System.getProperty("sentinel.mode"))
+                || "server".equalsIgnoreCase(System.getenv("SENTINEL_MODE"))) {
+            return true;
+        }
+        if (args != null) {
+            for (String arg : args) {
+                if ("--server".equalsIgnoreCase(arg) || "-server".equalsIgnoreCase(arg) || "--web".equalsIgnoreCase(arg) || arg.startsWith("--server.")) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    public static int run(String[] args) {
+        if (isServerMode(args)) {
+            SpringApplication.run(SentinelPrApplication.class, args);
+            return 0;
+        } else {
+            SentinelCliRunner runner = new SentinelCliRunner();
+            return runner.execute(args);
+        }
+    }
+
     public static void main(String[] args) {
-        SpringApplication.run(SentinelPrApplication.class, args);
+        int exitCode = run(args);
+        if (!isServerMode(args)) {
+            System.exit(exitCode);
+        }
     }
 
     @Bean

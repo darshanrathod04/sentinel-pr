@@ -10,6 +10,7 @@ import com.sentinelpr.core.governance.policy.SentinelPolicy;
 import com.sentinelpr.core.model.ReviewReport;
 import com.sentinelpr.core.model.SecurityRule;
 import com.sentinelpr.core.service.SentinelAuditOrchestrator;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -41,6 +42,7 @@ public class SentinelReviewController {
     private final PrReviewCommentBuilder reviewCommentBuilder;
     private final PolicyEngine policyEngine;
 
+    @Autowired
     public SentinelReviewController(SentinelAuditOrchestrator orchestrator) {
         this(orchestrator, new SarifReportGenerator(), new PrReviewCommentBuilder(), new PolicyEngine());
     }

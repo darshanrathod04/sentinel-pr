@@ -509,6 +509,13 @@ public class SentinelCliRunner {
             return 3;
         }
 
+        for (String arg : args) {
+            if ("--help".equalsIgnoreCase(arg) || "-h".equalsIgnoreCase(arg)) {
+                printUsage();
+                return 0;
+            }
+        }
+
         boolean isHistory = false;
         String historyRunId = null;
         for (int i = 0; i < args.length; i++) {
@@ -671,6 +678,7 @@ public class SentinelCliRunner {
         System.out.println("  --post-comment                 Post or update sticky PR review comment on GitHub");
         System.out.println("  -f, --format <format>          Output format (json, sarif, github, text) [default: json]");
         System.out.println("  --chat \"<prompt>\"            Ask SentinelPR AI assistant (Gemini BYOK)");
+        System.out.println("  --server                       Start SentinelPR REST API server (port 8080)");
     }
 
     public com.sentinelpr.client.MemoryFacade getMemoryFacade() {
