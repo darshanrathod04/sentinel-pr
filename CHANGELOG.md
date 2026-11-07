@@ -5,6 +5,29 @@ All notable changes to SentinelPR are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-11-07
+
+### Added - Python Security Intelligence & Multi-Language Analysis
+- **Python AST Parser & Taint Tracker (PythonSourceParser, PythonSecurityAnalyzer)**:
+  - Deterministic AST parsing for functions, classes, decorators, imports/aliases, comprehensions, and lambdas.
+  - Intra-procedural taint propagation across 10 security sinks (SQL injection, unisolated subprocess, SSRF, path traversal, insecure deserialization, LDAP/XPath injection, weak cryptography, plaintext credential assignments).
+  - Framework context analysis for Django, Flask, FastAPI, and generic Python standard library sinks.
+- **Manual Remediation Policy for Non-Java Codebases**:
+  - Architectural policy enforcement: Automated AST patch synthesis and regression verification remain strictly restricted to Java 21 LTS sources.
+  - Non-Java language findings produce actionable remediation guidance mapped to MANUAL_REMEDIATION_REQUIRED with zero synthetic or fake patches.
+- **CLI / Server Mode Separation**:
+  - Direct execution via java -jar sentinel-pr-1.2.0.jar routes immediately to SentinelCliRunner with zero Spring Boot Web container overhead.
+  - Server mode activated explicitly via --server, -server, --web, or SENTINEL_MODE=server.
+  - Added CLI --help / -h flag support returning exit code 0.
+
+### Fixed
+- Resolved Spring Boot 4 / Spring Framework 7 constructor injection defect on SentinelReviewController during Web context initialization.
+- Hardened Python TLS/SSL verification analysis and session cookie security checks.
+
+### Verified
+- Full regression suite with 261 passing tests (0 failures, 0 errors, 0 skipped).
+- 108-case benchmark ground truth verified (TP=62, FP=0, TN=46, FN=0).
+
 ## [1.0.0] — 2026-09-22
 
 Initial production release of the SentinelPR Enterprise Code & Security Review Copilot,
